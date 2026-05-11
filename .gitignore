@@ -1,0 +1,45 @@
+# local environment
+.env
+
+# Ignore YOLO model files
+*.pt
+*.pth
+*.model
+
+# Ignore cache directories
+.cache/
+__pycache__/
+
+# Ignore logs and temporary files
+aggregated_detections.json
+access.log
+detections.log
+*.log
+*.tmp
+*.json
+
+# Ignore Python virtual environment directories
+venv/
+env/
+
+# Ignore detection output images and videos
+detection_clips/
+detection_clips/**
+yolo_detections/
+yolo_detections/**
+logs/
+logs/**
+
+# debug dumps (ROI PNGs etc)
+debug/
+debug/**
+roi_latest*.png
+roi_unparseable*.png
+
+# region data
+ignore_zones.json
+data/
+data/**
+
+# local automation
+run_detection_firejail.sh
