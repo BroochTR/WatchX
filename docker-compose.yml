@@ -1,0 +1,34 @@
+services:
+  backend:
+    build:
+      context: ./backend
+    ports:
+      - "5000:5000"
+    environment:
+      - DATABASE_URL=postgresql://watchx:watchxpass@db:5432/watchx
+    depends_on:
+      - db
+
+  frontend:
+    build:
+      context: ./frontend
+    ports:
+      - "8080:80"
+    depends_on:
+      - backend
+
+  db:
+    image: postgres:15-alpine
+    environment:
+      - POSTGRES_USER=watchx
+      - POSTGRES_PASSWORD=watchxpass
+      - POSTGRES_DB=watchx
+    ports:
+      - "5432:5432"
+
+volumes:
+  db_data:
+
+networks:
+  default:
+    driver: bridge

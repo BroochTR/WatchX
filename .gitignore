@@ -1,45 +1,77 @@
-# local environment
+# General
+.DS_Store
+.vscode/
+.idea/
+**/*.log
+tmp/
+**/.*.swp
+**/.*.swo
+**/*~
+core.[0-9]*
+
+# Python / Backend
+**/__pycache__/
+*.py[cod]
+*$py.class
+**/venv/
 .env
+**/*.sqlite3
+backend/error_trace.txt
+backend_logs.txt
+engine_logs.txt
+engine_debug.log
+**/*.txt.log
+**/*.txt.bak
 
-# Ignore YOLO model files
-*.pt
-*.pth
-*.model
+# Node / Frontend
+**/node_modules/
+dist/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+frontend/.env
 
-# Ignore cache directories
-.cache/
-__pycache__/
+# Docker
+.docker/
+**/Dockerfile.local
+**/docker-compose.local.yml
 
-# Ignore logs and temporary files
-aggregated_detections.json
-access.log
-detections.log
-*.log
-*.tmp
-*.json
+# VibeNVR Specific
+/scripts/
+engine/scripts/
+backend/scripts/
+.agents/
+.agents/workflows/
+.roo/
+# Sanity Test Artifacts & Snapshots
+**/sanity_snapshot.json
+**/latest_system_auto.json
+**/sanity_backup.json
+tmp/sanity_snapshot.json
+tmp/latest_system_auto.json
 
-# Ignore Python virtual environment directories
-venv/
-env/
+# OmniState Protection
+antigravity.config.json
+project-summary.md
+tasks-history.json
+chunks/
+omnistate-plugin/
+.agent/
+.agents/
+/omnistate-dashboard.html
+tasks-archive.json
+scripts/local_tests/
+engine/scripts/verify_ai_engine.py
+engine/scripts/test_zone_logic.py
+backend/scripts/mock_ai_notification.py
+engine/scripts/test_coral.py
 
-# Ignore detection output images and videos
-detection_clips/
-detection_clips/**
-yolo_detections/
-yolo_detections/**
-logs/
-logs/**
-
-# debug dumps (ROI PNGs etc)
-debug/
-debug/**
-roi_latest*.png
-roi_unparseable*.png
-
-# region data
-ignore_zones.json
-data/
-data/**
-
-# local automation
-run_detection_firejail.sh
+# AI Models
+# We allow committing the final optimized models to the repo
+!engine/models/*.tflite
+!engine/models/*.txt
+# engine/download_models.py (Removed from ignore to fix build)
