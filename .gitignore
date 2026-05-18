@@ -40,7 +40,7 @@ frontend/.env
 **/Dockerfile.local
 **/docker-compose.local.yml
 
-# VibeNVR Specific
+# WatchX Specific
 /scripts/
 engine/scripts/
 backend/scripts/
