@@ -1,0 +1,550 @@
+import React, { useState, useEffect } from 'react';
+import { Plus, Trash2, Edit, Camera, Settings, Copy, Play, Pause, Layers, Check } from 'lucide-react';
+import { Toggle } from './ui/FormControls';
+import { useAuth } from '../contexts/AuthContext';
+import { useToast } from '../contexts/ToastContext';
+import { ConfirmModal } from '../components/ui/ConfirmModal';
+import { CAMERA_SETTINGS_CATEGORIES } from '../utils/cameraSettingsMapping';
+
+export const GroupsManager = ({ cameras, onUpdate }) => {
+    const { token, user } = useAuth();
+    const [groups, setGroups] = useState([]);
+    const [loading, setLoading] = useState(true);
+    const [showCreateModal, setShowCreateModal] = useState(false);
+    const [newGroupName, setNewGroupName] = useState('');
+
+    // Manage Modal
+    const [managingGroup, setManagingGroup] = useState(null);
+    const [selectedGroupIds, setSelectedGroupIds] = useState([]);
+    const [selectedCameraIds, setSelectedCameraIds] = useState([]);
+    const { showToast } = useToast();
+    const [confirmConfig, setConfirmConfig] = useState({ isOpen: false });
+
+    // Copy Modal
+    const [copyingGroup, setCopyingGroup] = useState(null);
+    const [sourceCameraId, setSourceCameraId] = useState('');
+    const [selectedCategories, setSelectedCategories] = useState(CAMERA_SETTINGS_CATEGORIES.map(c => c.id));
+
+    useEffect(() => {
+        if (token) fetchGroups();
+    }, [token]);
+
+    const fetchGroups = async () => {
+        try {
+            const res = await fetch('/api/groups', {
+                headers: { Authorization: `Bearer ${token}` }
+            });
+            if (res.ok) setGroups(await res.json());
+        } catch (err) {
+            console.error("Failed to fetch groups", err);
+        } finally {
+            setLoading(false);
+        }
+    };
+
+    const handleCreateGroup = async (e) => {
+        e.preventDefault();
+        try {
+            const res = await fetch('/api/groups', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+                body: JSON.stringify({ name: newGroupName })
+            });
+            if (res.ok) {
+                setNewGroupName('');
+                setShowCreateModal(false);
+                fetchGroups();
+                showToast('Group created successfully', 'success');
+            } else {
+                showToast('Failed to create group', 'error');
+            }
+        } catch (err) {
+            showToast('Error creating group', 'error');
+        }
+    };
+
+    const handleDeleteGroup = async (id) => {
+        setConfirmConfig({
+            isOpen: true,
+            title: 'Delete Group',
+            message: 'Are you sure you want to delete this group? The cameras will not be deleted, only the group association.',
+            onConfirm: async () => {
+                try {
+                    const res = await fetch(`/api/groups/${id}`, {
+                        method: 'DELETE',
+                        headers: { Authorization: `Bearer ${token}` }
+                    });
+                    if (res.ok) {
+                        fetchGroups();
+                        setSelectedGroupIds(prev => prev.filter(gid => gid !== id));
+                        showToast('Group deleted', 'success');
+                    } else {
+                        showToast('Failed to delete group', 'error');
+                    }
+                } catch (err) {
+                    showToast('Error deleting group', 'error');
+                }
+                setConfirmConfig({ isOpen: false });
+            },
+            onCancel: () => setConfirmConfig({ isOpen: false })
+        });
+    };
+
+    const handleBulkDeleteGroups = async () => {
+        if (selectedGroupIds.length === 0) return;
+
+        setConfirmConfig({
+            isOpen: true,
+            title: 'Bulk Delete Groups',
+            message: `Are you sure you want to delete ${selectedGroupIds.length} groups? Cameras will NOT be deleted.`,
+            onConfirm: async () => {
+                try {
+                    const res = await fetch('/api/groups/bulk-delete', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                            Authorization: `Bearer ${token}`
+                        },
+                        body: JSON.stringify(selectedGroupIds)
+                    });
+                    if (res.ok) {
+                        const data = await res.json();
+                        fetchGroups();
+                        setSelectedGroupIds([]);
+                        showToast(data.message, 'success');
+                    } else {
+                        showToast('Bulk delete failed', 'error');
+                    }
+                } catch (err) {
+                    showToast('Error performing bulk delete: ' + err.message, 'error');
+                }
+                setConfirmConfig({ isOpen: false });
+            },
+            onCancel: () => setConfirmConfig({ isOpen: false })
+        });
+    };
+
+    const handleSelectGroup = (id) => {
+        setSelectedGroupIds(prev =>
+            prev.includes(id) ? prev.filter(gid => gid !== id) : [...prev, id]
+        );
+    };
+
+    const handleSelectAllGroups = () => {
+        if (selectedGroupIds.length === groups.length) {
+            setSelectedGroupIds([]);
+        } else {
+            setSelectedGroupIds(groups.map(g => g.id));
+        }
+    };
+
+    const openManageModal = (group) => {
+        setManagingGroup(group);
+        setSelectedCameraIds(group.cameras.map(c => c.id));
+    };
+
+    const saveGroupCameras = async () => {
+        try {
+            const res = await fetch(`/api/groups/${managingGroup.id}/cameras`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+                body: JSON.stringify(selectedCameraIds)
+            });
+            if (res.ok) {
+                setManagingGroup(null);
+                fetchGroups();
+                showToast('Group updated successfully', 'success');
+            } else {
+                showToast('Failed to update group cameras', 'error');
+            }
+        } catch (err) {
+            showToast('Error updating group', 'error');
+        }
+    };
+
+    const handleAction = async (groupId, action, sourceId = null, categories = null) => {
+        let message = 'Are you sure? This will update all cameras in the group.';
+        let title = 'Group Action';
+
+        if (action === 'enable_motion') {
+            title = 'Enable Group Motion';
+            message = 'This will enable motion detection and recording for all cameras in this group. Continue?';
+        } else if (action === 'disable_motion') {
+            title = 'Disable Group Motion';
+            message = 'This will disable motion detection and recording for all cameras in this group. Continue?';
+        } else if (action === 'copy_settings') {
+            title = 'Copy Settings';
+            message = `This will overwrite selected settings categories for all cameras in this group with settings from the source camera. ${categories ? `(${categories.length} categories selected)` : ''} Continue?`;
+        }
+
+        setConfirmConfig({
+            isOpen: true,
+            title,
+            message,
+            onConfirm: async () => {
+                try {
+                    const body = { action };
+                    if (sourceId) body.source_camera_id = parseInt(sourceId);
+                    if (categories) body.categories = categories;
+
+                    const res = await fetch(`/api/groups/${groupId}/action`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+                        body: JSON.stringify(body)
+                    });
+
+                    if (res.ok) {
+                        const data = await res.json();
+                        showToast(`Action completed. Modified ${data.modified_count} cameras.`, 'success');
+                        setCopyingGroup(null);
+                        setSelectedCategories(CAMERA_SETTINGS_CATEGORIES.map(c => c.id));
+                        fetchGroups(); // Refresh groups to update UI
+                        if (onUpdate) onUpdate(); // Refresh cameras in parent component
+                    } else {
+                        const err = await res.json();
+                        showToast('Action failed: ' + err.detail, 'error');
+                    }
+                } catch (err) {
+                    showToast('Error performing action', 'error');
+                }
+                setConfirmConfig({ isOpen: false });
+            },
+            onCancel: () => setConfirmConfig({ isOpen: false })
+        });
+    };
+
+    const toggleCategory = (id) => {
+        if (selectedCategories.includes(id)) {
+            setSelectedCategories(selectedCategories.filter(c => c !== id));
+        } else {
+            setSelectedCategories([...selectedCategories, id]);
+        }
+    };
+
+    return (
+        <div className="space-y-6">
+            <div className="flex justify-between items-center">
+                <h3 className="text-xl font-semibold flex items-center gap-2">
+                    <Layers className="w-5 h-5" />
+                    Camera Groups
+                </h3>
+                <div className="flex items-center gap-4">
+                    {user?.role === 'admin' && groups.length > 0 && (
+                        <button
+                            onClick={handleSelectAllGroups}
+                            className="flex items-center justify-center space-x-2 bg-muted hover:bg-secondary text-foreground px-3 h-8 rounded-lg transition-all whitespace-nowrap text-xs font-bold border border-border shadow-sm active:scale-95"
+                        >
+                            <div className={`w-3.5 h-3.5 rounded-sm border flex items-center justify-center transition-colors ${selectedGroupIds.length === groups.length ? 'bg-primary border-primary' : 'bg-background border-border'}`}>
+                                {selectedGroupIds.length === groups.length && <svg className="w-2.5 h-2.5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={5} d="M5 13l4 4L19 7" /></svg>}
+                            </div>
+                            <span>{selectedGroupIds.length === groups.length ? 'Deselect All' : 'Select All'}</span>
+                        </button>
+                    )}
+                    {user?.role === 'admin' && (
+                        <button
+                            onClick={() => setShowCreateModal(true)}
+                            className="flex items-center space-x-2 bg-primary text-primary-foreground px-4 py-2 rounded-lg hover:bg-primary/90 transition-colors"
+                        >
+                            <Plus className="w-4 h-4" />
+                            <span>New Group</span>
+                        </button>
+                    )}
+                </div>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                {groups.map(group => (
+                    <div
+                        key={group.id}
+                        className={`bg-card border-2 rounded-xl flex flex-col hover:shadow-lg transition-all duration-300 group overflow-hidden relative
+                            ${selectedGroupIds.includes(group.id) ? 'border-primary ring-1 ring-primary/20' : 'border-border'}
+                        `}
+                    >
+                        {/* Selection Checkbox */}
+                        {user?.role === 'admin' && (
+                            <div
+                                className={`absolute top-4 left-4 z-10 w-5 h-5 rounded border-2 flex items-center justify-center transition-all cursor-pointer ${selectedGroupIds.includes(group.id) ? 'bg-primary border-primary' : 'bg-background/80 border-border group-hover:border-primary/50'
+                                    }`}
+                                onClick={(e) => {
+                                    e.stopPropagation();
+                                    handleSelectGroup(group.id);
+                                }}
+                            >
+                                {selectedGroupIds.includes(group.id) && <svg className="w-3.5 h-3.5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={4} d="M5 13l4 4L19 7" /></svg>}
+                            </div>
+                        )}
+                        <div className="p-6 flex-1">
+                            {/* Top Row: Icon and Motion Toggle */}
+                            <div className="flex justify-between items-center mb-4">
+                                <div className={`p-2 rounded-lg transition-colors ml-2 ${selectedGroupIds.includes(group.id) ? 'bg-primary text-white' : 'bg-primary/10 text-primary'}`}>
+                                    <Layers className="w-6 h-6" />
+                                </div>
+
+                                {/* Motion Toggle in Top Right */}
+                                <div className="flex items-center bg-muted/30 rounded-lg p-1 border border-border flex-shrink-0" title="Toggle Motion Detection for Group">
+                                    <div className="mr-2 flex items-center">
+                                        {group.cameras.length > 0 && group.cameras.every(c => c.recording_mode !== 'Off') ? (
+                                            <Play className="w-3 h-3 text-green-500 mr-1" />
+                                        ) : (
+                                            <Pause className="w-3 h-3 text-muted-foreground mr-1" />
+                                        )}
+                                        <span className="text-[10px] font-medium text-muted-foreground uppercase">Motion</span>
+                                    </div>
+                                    <Toggle
+                                        compact={true}
+                                        checked={group.cameras.length > 0 && group.cameras.every(c => c.recording_mode !== 'Off')}
+                                        onChange={(val) => handleAction(group.id, val ? 'enable_motion' : 'disable_motion')}
+                                    />
+                                </div>
+                            </div>
+
+                            {/* Group Info */}
+                            <div className="mb-4">
+                                <h3 className="font-semibold text-lg">{group.name}</h3>
+                                <p className="text-xs text-muted-foreground flex items-center gap-1">
+                                    {group.cameras.length} cameras
+                                </p>
+                            </div>
+
+                            {/* Camera Badges */}
+                            <div className="flex flex-wrap gap-2 min-h-[40px] content-start">
+                                {group.cameras.length === 0 && <span className="text-xs text-muted-foreground italic">No cameras assigned</span>}
+                                {group.cameras.slice(0, 5).map(cam => (
+                                    <span key={cam.id} className="text-xs bg-muted px-2 py-1 rounded-md border border-border flex items-center">
+                                        <div className="relative mr-1.5 flex items-center">
+                                            <Camera className="w-3 h-3 opacity-50" />
+                                            {cam.recording_mode === 'Motion Triggered' && (
+                                                <span className="absolute -top-1 -right-1 w-2 h-2 bg-red-500 rounded-full border border-card animate-pulse shadow-[0_0_5px_rgba(239,68,68,0.5)]"></span>
+                                            )}
+                                            {cam.recording_mode === 'Continuous' && (
+                                                <span className="absolute -top-1 -right-1 w-2 h-2 bg-green-500 rounded-full border border-card shadow-[0_0_5px_rgba(34,197,94,0.5)]"></span>
+                                            )}
+                                        </div>
+                                        {cam.name}
+                                    </span>
+                                ))}
+                                {group.cameras.length > 5 && <span className="text-xs text-muted-foreground py-1">+{group.cameras.length - 5} more</span>}
+                            </div>
+                        </div>
+
+                        {/* Actions Footer */}
+                        <div className="flex justify-between items-center p-4 bg-muted/10 border-t border-border">
+                            {/* Left Action: Copy Settings */}
+                            <div>
+                                {user?.role === 'admin' && (
+                                    <button
+                                        onClick={() => setCopyingGroup(group)}
+                                        className="flex items-center space-x-1.5 px-3 py-1.5 text-xs font-medium text-blue-600 bg-blue-50 hover:bg-blue-100 rounded-md transition-colors dark:bg-blue-900/20 dark:text-blue-400 dark:hover:bg-blue-900/40"
+                                        title="Copy Settings to all cameras in group"
+                                    >
+                                        <Copy className="w-3.5 h-3.5" />
+                                        <span>Copy Settings</span>
+                                    </button>
+                                )}
+                            </div>
+
+                            {/* Right Actions: Edit/Delete */}
+                            <div className="flex space-x-2">
+                                {user?.role === 'admin' && (
+                                    <>
+                                        <button
+                                            onClick={() => openManageModal(group)}
+                                            className="p-2 text-blue-500 hover:bg-blue-100 dark:hover:bg-blue-900/40 rounded-lg transition-colors"
+                                            title="Edit Group"
+                                        >
+                                            <Edit className="w-5 h-5" />
+                                        </button>
+                                        <button
+                                            onClick={() => handleDeleteGroup(group.id)}
+                                            className="p-2 text-red-500 hover:bg-red-100 dark:hover:bg-red-900/40 rounded-lg transition-colors"
+                                            title="Delete Group"
+                                        >
+                                            <Trash2 className="w-5 h-5" />
+                                        </button>
+                                    </>
+                                )}
+                            </div>
+                        </div>
+                    </div>
+                ))
+                }
+            </div>
+
+            {/* Create Modal */}
+            {showCreateModal && (
+                <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+                    <form onSubmit={handleCreateGroup} className="bg-card p-6 rounded-xl w-full max-w-sm border border-border">
+                        <h3 className="text-lg font-bold mb-4">Create New Group</h3>
+                        <input
+                            autoFocus
+                            className="w-full px-3 py-2 bg-background border border-input rounded-md mb-4"
+                            placeholder="Group Name"
+                            value={newGroupName}
+                            onChange={e => setNewGroupName(e.target.value)}
+                        />
+                        <div className="flex justify-end space-x-2">
+                            <button type="button" onClick={() => setShowCreateModal(false)} className="px-4 py-2 text-sm text-muted-foreground hover:bg-muted rounded-md">Cancel</button>
+                            <button type="submit" disabled={!newGroupName} className="px-4 py-2 text-sm bg-primary text-primary-foreground rounded-md disabled:opacity-50">Create</button>
+                        </div>
+                    </form>
+                </div>
+            )}
+
+            {/* Manage Cameras Modal */}
+            {managingGroup && (
+                <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+                    <div className="bg-card p-6 rounded-xl w-full max-w-lg border border-border max-h-[80vh] flex flex-col">
+                        <h3 className="text-lg font-bold mb-4">Manage Group: {managingGroup.name}</h3>
+                        <div className="flex-1 overflow-y-auto min-h-0 space-y-2 mb-4 pr-2">
+                            {(() => {
+                                const availableCameras = cameras.filter(cam => {
+                                    const isInOtherGroup = groups.some(g =>
+                                        g.id !== managingGroup.id &&
+                                        g.cameras.some(gc => gc.id === cam.id)
+                                    );
+                                    return !isInOtherGroup;
+                                });
+
+                                if (availableCameras.length === 0) {
+                                    return (
+                                        <div className="flex flex-col items-center justify-center py-8 text-center bg-muted/20 rounded-lg border border-dashed border-border">
+                                            <Camera className="w-8 h-8 text-muted-foreground mb-2 opacity-20" />
+                                            <p className="text-sm text-muted-foreground">No free cameras available</p>
+                                            <p className="text-xs text-muted-foreground/60 mt-1">All cameras are already assigned to other groups.</p>
+                                        </div>
+                                    );
+                                }
+
+                                return availableCameras.map(cam => (
+                                    <label key={cam.id} className="flex items-center justify-between p-3 rounded-lg border border-border hover:bg-muted/50 cursor-pointer transition-colors">
+                                        <div className="flex items-center space-x-3">
+                                            <Camera className="w-4 h-4 text-muted-foreground" />
+                                            <span className="font-medium">{cam.name}</span>
+                                        </div>
+                                        <div className={`w-5 h-5 rounded border flex items-center justify-center ${selectedCameraIds.includes(cam.id) ? 'bg-primary border-primary text-primary-foreground' : 'border-input'}`}>
+                                            {selectedCameraIds.includes(cam.id) && <Check className="w-3 h-3" />}
+                                        </div>
+                                        <input
+                                            type="checkbox"
+                                            className="hidden"
+                                            checked={selectedCameraIds.includes(cam.id)}
+                                            onChange={() => {
+                                                if (selectedCameraIds.includes(cam.id)) {
+                                                    setSelectedCameraIds(prev => prev.filter(id => id !== cam.id));
+                                                } else {
+                                                    setSelectedCameraIds(prev => [...prev, cam.id]);
+                                                }
+                                            }}
+                                        />
+                                    </label>
+                                ));
+                            })()}
+                        </div>
+                        <div className="flex justify-end space-x-2 pt-4 border-t border-border">
+                            <button onClick={() => setManagingGroup(null)} className="px-4 py-2 text-sm text-muted-foreground hover:bg-muted rounded-md">Cancel</button>
+                            <button onClick={saveGroupCameras} className="px-4 py-2 text-sm bg-primary text-primary-foreground rounded-md">Save Changes</button>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* Copy Settings Modal */}
+            {copyingGroup && (
+                <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+                    <div className="bg-card p-6 rounded-xl w-full max-w-md border border-border shadow-2xl flex flex-col max-h-[90vh]">
+                        <div className="flex items-center gap-2 mb-2 text-blue-500">
+                            <Copy className="w-5 h-5" />
+                            <h3 className="text-lg font-bold text-foreground">Copy Settings</h3>
+                        </div>
+                        <p className="text-sm text-muted-foreground mb-6">Select a source camera and the categories to apply to all cameras in <strong>{copyingGroup.name}</strong>.</p>
+
+                        <div className="space-y-6 overflow-y-auto pr-2 -mr-2 mb-6">
+                            <div>
+                                <span className="text-[10px] font-bold text-muted-foreground uppercase tracking-wider mb-2 block">1. Source Camera</span>
+                                <select
+                                    className="w-full px-3 py-2 bg-background border border-input rounded-md text-sm"
+                                    value={sourceCameraId}
+                                    onChange={e => setSourceCameraId(e.target.value)}
+                                >
+                                    <option value="">-- Select Source Camera --</option>
+                                    <option disabled>-- Outside Group --</option>
+                                    {cameras.filter(c => !copyingGroup.cameras.some(gc => gc.id === c.id)).map(c => (
+                                        <option key={c.id} value={c.id}>External: {c.name}</option>
+                                    ))}
+                                    <option disabled>-- Inside Group --</option>
+                                    {copyingGroup.cameras.map(c => (
+                                        <option key={c.id} value={c.id}>{c.name}</option>
+                                    ))}
+                                </select>
+                            </div>
+
+                            <div>
+                                <div className="flex justify-between items-center mb-2">
+                                    <span className="text-[10px] font-bold text-muted-foreground uppercase tracking-wider">2. Settings Categories</span>
+                                    <div className="flex gap-2">
+                                        <button className="text-[10px] uppercase font-bold text-blue-600 hover:underline" onClick={() => setSelectedCategories(CAMERA_SETTINGS_CATEGORIES.map(c => c.id))}>All</button>
+                                        <button className="text-[10px] uppercase font-bold text-muted-foreground hover:underline" onClick={() => setSelectedCategories([])}>None</button>
+                                    </div>
+                                </div>
+                                <div className="grid grid-cols-1 gap-1.5 bg-muted/20 p-2 rounded-lg border border-border/50">
+                                    {CAMERA_SETTINGS_CATEGORIES.map(cat => (
+                                        <div
+                                            key={cat.id}
+                                            className={`flex items-center justify-between p-2 rounded-md cursor-pointer transition-colors ${selectedCategories.includes(cat.id) ? 'bg-blue-500/10 text-blue-600 dark:text-blue-400' : 'hover:bg-muted text-muted-foreground'}`}
+                                            onClick={() => toggleCategory(cat.id)}
+                                        >
+                                            <span className="text-xs font-medium">{cat.label}</span>
+                                            <div className={`w-4 h-4 rounded border transition-colors flex items-center justify-center ${selectedCategories.includes(cat.id) ? 'bg-blue-500 border-blue-500' : 'border-muted-foreground/30'}`}>
+                                                {selectedCategories.includes(cat.id) && <Check className="w-3 h-3 text-white" />}
+                                            </div>
+                                        </div>
+                                    ))}
+                                </div>
+                            </div>
+                        </div>
+
+                        <div className="flex justify-end space-x-2 pt-4 border-t border-border">
+                            <button onClick={() => { setCopyingGroup(null); setSelectedCategories(CAMERA_SETTINGS_CATEGORIES.map(c => c.id)); }} className="px-4 py-2 text-sm text-muted-foreground hover:bg-muted rounded-md transition-colors">Cancel</button>
+                            <button
+                                onClick={() => handleAction(copyingGroup.id, 'copy_settings', sourceCameraId, selectedCategories)}
+                                disabled={!sourceCameraId || selectedCategories.length === 0}
+                                className="px-5 py-2 text-sm bg-blue-600 hover:bg-blue-700 text-white rounded-md disabled:opacity-50 disabled:bg-muted disabled:text-muted-foreground shadow-lg shadow-blue-500/10 transition-all font-medium"
+                            >
+                                Apply to Group
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
+            {/* Bulk Actions Floating Bar */}
+            {
+                selectedGroupIds.length > 0 && (
+                    <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-50 animate-in fade-in slide-in-from-bottom-4 duration-300">
+                        <div className="bg-card/95 backdrop-blur-md border border-primary/20 shadow-2xl rounded-2xl px-6 py-4 flex items-center space-x-6 text-foreground min-w-[320px]">
+                            <div className="flex-1">
+                                <p className="font-bold text-sm">{selectedGroupIds.length} Group(s) selected</p>
+                                <p className="text-[10px] text-muted-foreground uppercase font-bold tracking-wider">Bulk Actions</p>
+                            </div>
+                            <div className="flex items-center space-x-2">
+                                <button
+                                    onClick={() => setSelectedGroupIds([])}
+                                    className="px-3 py-1.5 text-xs font-semibold hover:bg-muted/50 rounded-lg transition-colors"
+                                >
+                                    Clear
+                                </button>
+                                <button
+                                    onClick={handleBulkDeleteGroups}
+                                    className="px-4 py-2 bg-red-500 hover:bg-red-600 text-white text-xs font-bold rounded-lg transition-all flex items-center shadow-lg shadow-red-500/20 active:scale-95"
+                                >
+                                    <Trash2 className="w-3.5 h-3.5 mr-1.5" />
+                                    Delete Selected
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                )
+            }
+            <ConfirmModal {...confirmConfig} />
+        </div>
+    );
+};
