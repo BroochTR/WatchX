@@ -1,0 +1,477 @@
+"""
+Orphan Recovery Script - Scans the recordings directory and imports any files
+that exist on disk but are missing from the database.
+
+Run via: docker compose exec backend python sync_recordings.py
+Or:      docker compose exec backend python sync_recordings.py --dry-run
+"""
+import os
+import sys
+import subprocess
+import argparse
+import time
+from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
+
+sys.path.append('/app')
+
+from database import SessionLocal
+from models import Event, Camera
+import logging
+
+# Configure logging
+logger = logging.getLogger(__name__)
+
+# Basic config for standalone run checks
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+
+# Get timezone from environment
+TZ_NAME = os.environ.get('TZ', 'Europe/Rome')
+try:
+    LOCAL_TZ = ZoneInfo(TZ_NAME)
+except:
+    LOCAL_TZ = ZoneInfo('UTC')
+
+def get_video_duration(file_path):
+    """Get duration in seconds using ffprobe"""
+    try:
+        cmd = [
+            "ffprobe", "-v", "error", "-show_entries", "format=duration",
+            "-of", "default=noprint_wrappers=1:nokey=1", file_path
+        ]
+        result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=10)
+        if result.returncode == 0:
+            return float(result.stdout.strip())
+    except:
+        pass
+    return 0
+
+def generate_thumbnail(video_path, thumb_path):
+    """Generate thumbnail using ffmpeg"""
+    try:
+        os.makedirs(os.path.dirname(thumb_path), exist_ok=True)
+        # Use simple seek to start
+        subprocess.run([
+            "ffmpeg", "-y", "-i", video_path, 
+            "-ss", "00:00:00.5", "-vframes", "1", "-vf", "scale=320:-1",
+            thumb_path
+        ], check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=45) # Increased timeout
+        return True
+    except subprocess.CalledProcessError as e:
+        logger.warning(f"Thumbnail generation failed for {os.path.basename(video_path)}: FFmpeg returned {e.returncode}. Stderr: {e.stderr.decode('utf-8', errors='ignore') if e.stderr else 'No stderr'}")
+        return False
+    except Exception as e:
+        logger.warning(f"Thumbnail generation error for {os.path.basename(video_path)}: {str(e)}")
+        return False
+
+def is_video_valid(file_path):
+    """Check if video file is valid (has moov atom, can be read)"""
+    try:
+        cmd = [
+            "ffprobe", "-v", "error", "-show_entries", "format=duration",
+            "-of", "default=noprint_wrappers=1:nokey=1", file_path
+        ]
+        result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=10)
+        if result.returncode != 0:
+            return False
+        duration = result.stdout.strip()
+        # Must have a valid duration > 0
+        return duration and float(duration) > 0
+    except:
+        return False
+
+def is_safe_path(file_path):
+    """Ensure file path is within allowed data directories"""
+    try:
+        abs_path = os.path.abspath(file_path)
+        # Strict check for data directory
+        return abs_path.startswith('/data') or abs_path.startswith('/var/lib/watchx/recordings')
+    except:
+        return False
+
+def sync_recordings(dry_run=False):
+    logger.info("=" * 60)
+    logger.info("watchx - Orphan Recording Recovery")
+    logger.info("=" * 60)
+    logger.info(f"Timezone: {TZ_NAME}")
+    logger.info(f"Mode: {'DRY RUN (no changes)' if dry_run else 'LIVE (will import)'}")
+    
+    db = SessionLocal()
+    data_root = "/data"
+    
+    try:
+        # Get all cameras
+        cameras = {str(c.id): c for c in db.query(Camera).all()}
+        if not cameras:
+            logger.warning("WARNING: No cameras found in database!")
+            logger.warning("This script can only import files for existing cameras.")
+            return
+            
+        logger.info(f"Found {len(cameras)} cameras in database:")
+        for cam_id, cam in cameras.items():
+            logger.info(f"  - ID {cam_id}: {cam.name}")
+        
+        # Scan for orphans
+        added_count = 0
+        skipped_count = 0
+        unknown_camera_files = 0
+        unknown_camera_size = 0
+        
+        for entry in os.listdir(data_root):
+            entry_path = os.path.join(data_root, entry)
+            
+            # Skip non-directories and special folders
+            if not os.path.isdir(entry_path):
+                continue
+            if entry in ['logs', 'temp_snaps', 'motion']:
+                continue
+            if not entry.isdigit():
+                continue
+                
+            camera_id_str = entry
+            
+            # Check if camera exists
+            if camera_id_str not in cameras:
+                # Camera no longer exists - these files are truly orphaned
+                # Delete the entire folder since there's no camera to associate them with
+                file_count = 0
+                deleted_size = 0
+                
+                for dirpath, dirnames, filenames in os.walk(entry_path):
+                    for f in filenames:
+                        file_path = os.path.join(dirpath, f)
+                        try:
+                            file_size = os.path.getsize(file_path)
+                            if dry_run:
+                                file_count += 1
+                                deleted_size += file_size
+                            else:
+                                os.remove(file_path)
+                                file_count += 1
+                                deleted_size += file_size
+                        except Exception as e:
+                            logger.warning(f"  ⚠️  Failed to delete {file_path}: {e}")
+                
+                # Remove empty directories
+                if not dry_run:
+                    try:
+                        import shutil
+                        shutil.rmtree(entry_path)
+                    except Exception as e:
+                        logger.warning(f"  ⚠️  Failed to remove folder {entry_path}: {e}")
+                
+                if file_count > 0:
+                    size_mb = round(deleted_size / (1024 * 1024), 2)
+                    unknown_camera_files += file_count
+                    unknown_camera_size += deleted_size
+                    action = "Would delete" if dry_run else "Deleted"
+                    logger.info(f"🗑️  {action} {file_count} orphaned files ({size_mb} MB) from deleted camera ID {camera_id_str}")
+                continue
+            
+            camera = cameras[camera_id_str]
+            logger.info(f"Scanning Camera {camera_id_str} ({camera.name})...")
+            
+            # Walk through date folders
+            for root, dirs, files in os.walk(entry_path):
+                for f in files:
+                    # Only process video files
+                    if not f.lower().endswith(('.mp4', '.mkv', '.avi')):
+                        continue
+                        
+                    full_path = os.path.join(root, f)
+                    
+                    # Build the DB path format
+                    rel_path = os.path.relpath(full_path, data_root).replace("\\", "/")
+                    db_file_path = f"/var/lib/watchx/recordings/{rel_path}"
+                    
+                    # Check if already in DB
+                    exists = db.query(Event).filter(Event.file_path == db_file_path).first()
+                    if exists:
+                        skipped_count += 1
+                        continue
+                    
+                    # Parse timestamp from path structure
+                    # Expected: {camera_id}/{date}/{time}.mp4
+                    # e.g., 28/2026-01-20/21-05-30.mp4
+                    try:
+                        parent_dir = os.path.basename(root)  # "2026-01-20"
+                        filename_base = os.path.splitext(f)[0]  # "21-05-30" or "21-05-30-00"
+                        
+                        # Handle potential suffix like "-00"
+                        time_part = filename_base.split("-00")[0] if "-00" in filename_base else filename_base
+                        
+                        dt_str = f"{parent_dir} {time_part}"
+                        timestamp_start = datetime.strptime(dt_str, "%Y-%m-%d %H-%M-%S")
+                        timestamp_start = timestamp_start.replace(tzinfo=LOCAL_TZ)
+                        
+                    except (ValueError, IndexError) as e:
+                        logger.warning(f"  ⚠️  Could not parse date from {f}, using file mtime")
+                        mtime = os.path.getmtime(full_path)
+                        timestamp_start = datetime.fromtimestamp(mtime, tz=LOCAL_TZ)
+                    
+                    # Get file info
+                    file_size = os.path.getsize(full_path)
+                    
+                    # Check age - skip recent files (likely active recording or being written)
+                    mtime = os.path.getmtime(full_path)
+                    if (time.time() - mtime) < 120: # 2 minutes grace period
+                        continue
+
+                    # Validate video integrity before importing
+                    if not is_video_valid(full_path):
+                        logger.warning(f"  ⚠️  Found corrupted orphan: {rel_path}")
+                        if not dry_run:
+                            try:
+                                if is_safe_path(full_path):
+                                    os.remove(full_path)
+                                    # Also remove thumbnail if exists
+                                    thumb_candidate = os.path.splitext(full_path)[0] + ".jpg"
+                                    if os.path.exists(thumb_candidate):
+                                        os.remove(thumb_candidate)
+                                    logger.info(f"  🗑️  Deleted corrupted orphan: {rel_path}")
+                            except Exception as e:
+                                logger.error(f"  ❌ Failed to delete corrupted file: {e}")
+                        else:
+                             logger.info(f"  [Would Delete] corrupted orphan: {rel_path}")
+                        continue
+                        
+                    duration = get_video_duration(full_path)
+                    timestamp_end = timestamp_start + timedelta(seconds=duration)
+                    
+                    # Thumbnail
+                    thumb_name = os.path.splitext(f)[0] + ".jpg"
+                    thumb_full = os.path.join(root, thumb_name)
+                    thumb_db_path = None
+                    
+                    if os.path.exists(thumb_full):
+                        thumb_rel = os.path.relpath(thumb_full, data_root).replace("\\", "/")
+                        thumb_db_path = f"/var/lib/watchx/recordings/{thumb_rel}"
+                    elif not dry_run:
+                        # Generate thumbnail
+                        if generate_thumbnail(full_path, thumb_full):
+                            thumb_rel = os.path.relpath(thumb_full, data_root).replace("\\", "/")
+                            thumb_db_path = f"/var/lib/watchx/recordings/{thumb_rel}"
+                    
+                    if dry_run:
+                        logger.info(f"  [Would Import] {rel_path}")
+                    else:
+                        # Create Event
+                        new_event = Event(
+                            camera_id=int(camera_id_str),
+                            timestamp_start=timestamp_start,
+                            timestamp_end=timestamp_end,
+                            type="video",
+                            event_type="motion",
+                            file_path=db_file_path,
+                            thumbnail_path=thumb_db_path,
+                            file_size=file_size,
+                            motion_score=0.0
+                        )
+                        db.add(new_event)
+                        logger.info(f"  ✅ Imported: {rel_path}")
+                    
+                    added_count += 1
+                    
+                    # Commit every 50 to avoid memory issues
+                    if not dry_run and added_count % 50 == 0:
+                        db.commit()
+                        logger.info(f"  ... committed {added_count} events")
+        
+        if not dry_run:
+            db.commit()
+        
+        # Step 2: Fix missing thumbnails for existing events
+        logger.info("Checking for missing thumbnails...")
+        thumb_fixed = 0
+        events_without_thumbs = db.query(Event).filter(
+            Event.thumbnail_path == None, 
+            Event.type == "video"
+        ).all()
+        
+        for event in events_without_thumbs:
+            if not event.file_path:
+                continue
+            
+            # Convert DB path to filesystem path
+            file_path = event.file_path
+            if file_path.startswith('/var/lib/watchx/recordings'):
+                file_path = file_path.replace('/var/lib/watchx/recordings', '/data', 1)
+            elif file_path.startswith('/var/lib/motion'):
+                file_path = file_path.replace('/var/lib/motion', '/data', 1)
+            
+            if not os.path.exists(file_path):
+                continue
+            
+            # Generate thumbnail
+            thumb_path = file_path.rsplit('.', 1)[0] + '.jpg'
+            if not dry_run and generate_thumbnail(file_path, thumb_path):
+                db_thumb_path = event.file_path.rsplit('.', 1)[0] + '.jpg'
+                event.thumbnail_path = db_thumb_path
+                thumb_fixed += 1
+            elif dry_run:
+                logger.info(f"  [Would generate] thumbnail for {os.path.basename(file_path)}")
+        
+        if not dry_run and thumb_fixed > 0:
+            db.commit()
+        
+        # Step 3: Clean up corrupted/incomplete videos
+        logger.info("Checking for corrupted/incomplete videos...")
+        corrupted_count = 0
+        corrupted_size = 0
+        all_video_events = db.query(Event).filter(Event.type == "video").all()
+        
+        for event in all_video_events:
+            if not event.file_path:
+                continue
+            
+            # Convert DB path to filesystem path
+            file_path = event.file_path
+            if file_path.startswith('/var/lib/watchx/recordings'):
+                file_path = file_path.replace('/var/lib/watchx/recordings', '/data', 1)
+            elif file_path.startswith('/var/lib/motion'):
+                file_path = file_path.replace('/var/lib/motion', '/data', 1)
+            
+            if not os.path.exists(file_path):
+                # File missing - delete DB entry
+                if not dry_run:
+                    db.delete(event)
+                corrupted_count += 1
+                logger.info(f"  🗑️  Missing file, removing DB entry: {os.path.basename(event.file_path)}")
+                continue
+            
+            # Check if video is valid
+            # Skip very recent files to avoid deleting those currently being written
+            # or finalized by the engine (prevents "Error writing trailer" in engine)
+            try:
+                if (time.time() - os.path.getmtime(file_path)) < 300: # 5 minutes
+                    continue
+            except:
+                continue
+
+            if not is_video_valid(file_path):
+                file_size = os.path.getsize(file_path)
+                corrupted_size += file_size
+                
+                if dry_run:
+                    logger.info(f"  [Would delete] corrupted: {os.path.basename(file_path)}")
+                else:
+                    # Validate path safety before deletion
+                    if not is_safe_path(file_path):
+                        logger.warning(f"  ⚠️  Skipping unsafe path deletion: {file_path}")
+                        continue
+
+                    # Delete file
+                    try:
+                        os.remove(file_path)
+                        # Delete thumbnail if exists
+                        thumb_path = file_path.rsplit('.', 1)[0] + '.jpg'
+                        if os.path.exists(thumb_path):
+                            os.remove(thumb_path)
+                    except Exception as e:
+                        logger.warning(f"  ⚠️  Failed to delete file: {e}")
+                    
+                    # Delete DB entry
+                    db.delete(event)
+                    logger.info(f"  🗑️  Deleted corrupted: {os.path.basename(file_path)}")
+                
+                corrupted_count += 1
+        
+        if not dry_run and corrupted_count > 0:
+            db.commit()
+
+        # Step 4: Fix Zero Duration Events
+        # Sometimes events exist but have bad metadata (crash during record)
+        logger.info("Checking for events with zero duration...")
+        fixed_duration_count = 0
+        
+        # Find video events where duration is effectively 0 (< 1s) but we expect content
+        # We can detect this by checking if timestamp_end is close to timestamp_start
+        # SQLite storage of datetime might need care, but logic: (end - start).total_seconds() < 1
+        zero_dur_events = []
+        all_videos = db.query(Event).filter(Event.type == "video").all()
+        
+        for event in all_videos:
+            if event.timestamp_end and event.timestamp_start:
+                dur = (event.timestamp_end - event.timestamp_start).total_seconds()
+                if dur < 1.0:
+                    zero_dur_events.append(event)
+            elif not event.timestamp_end:
+                 zero_dur_events.append(event)
+
+        for event in zero_dur_events:
+            if not event.file_path: 
+                continue
+
+            # Convert to fs path
+            file_path = event.file_path
+            if file_path.startswith('/var/lib/watchx/recordings'):
+                file_path = file_path.replace('/var/lib/watchx/recordings', '/data', 1)
+            elif file_path.startswith('/var/lib/motion'):
+                file_path = file_path.replace('/var/lib/motion', '/data', 1)
+            
+            if not os.path.exists(file_path):
+                continue
+                
+            # Get real duration
+            true_dur = get_video_duration(file_path)
+            if true_dur > 1.0:
+                if dry_run:
+                    logger.info(f"  [Would Fix] Duration for {os.path.basename(file_path)}: 0s -> {true_dur}s")
+                else:
+                    event.timestamp_end = event.timestamp_start + timedelta(seconds=true_dur)
+                    event.file_size = os.path.getsize(file_path) # Update size too just in case
+                    fixed_duration_count += 1
+                    logger.info(f"  ⏱️  Fixed duration for {os.path.basename(file_path)}: {true_dur}s")
+
+        if not dry_run and fixed_duration_count > 0:
+            db.commit()
+        
+        # Prepare result stats
+        stats = {
+            "imported": added_count,
+            "skipped": skipped_count,
+            "thumbnails_generated": thumb_fixed,
+            "corrupted_deleted": corrupted_count,
+            "corrupted_size_mb": round(corrupted_size / (1024 * 1024), 2),
+            "orphaned_deleted": unknown_camera_files,
+            "orphaned_size_mb": round(unknown_camera_size / (1024 * 1024), 2),
+            "dry_run": dry_run
+        }
+        
+        print()
+        logger.info("=" * 60)
+        logger.info("Summary:")
+        logger.info(f"  {'Would import' if dry_run else 'Imported'}: {stats['imported']} recordings")
+        logger.info(f"  Already in DB (skipped): {stats['skipped']}")
+        if stats['thumbnails_generated'] > 0 or (dry_run and len(events_without_thumbs) > 0):
+            count = len(events_without_thumbs) if dry_run else stats['thumbnails_generated']
+            action = "Would generate" if dry_run else "Generated"
+            logger.info(f"  🖼️  {action} {count} missing thumbnails")
+        if stats['corrupted_deleted'] > 0:
+            action = "Would delete" if dry_run else "Deleted"
+            logger.info(f"  ⚠️  {action} {stats['corrupted_deleted']} corrupted/incomplete videos ({stats['corrupted_size_mb']} MB)")
+        if stats['orphaned_deleted'] > 0:
+            action = "Would delete" if dry_run else "Deleted"
+            logger.info(f"  🗑️  {action} {stats['orphaned_deleted']} orphaned files ({stats['orphaned_size_mb']} MB) from deleted cameras")
+        logger.info("=" * 60)
+        
+        # Printing JSON line for Frontend Parsing
+        import json
+        logger.info(f"JSON_SUMMARY:{json.dumps(stats)}") # Explicit prefix for regex
+        
+        return stats
+        
+    except Exception as e:
+        logger.error(f"Error: {e}")
+        import traceback
+        traceback.print_exc()
+        return {"error": str(e)}
+    finally:
+        db.close()
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="Recover orphaned recordings")
+    parser.add_argument("--dry-run", action="store_true", help="Show what would be imported without making changes")
+    args = parser.parse_args()
+    
+    sync_recordings(dry_run=args.dry_run)

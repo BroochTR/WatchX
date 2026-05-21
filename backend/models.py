@@ -1,5 +1,5 @@
-from sqlalchemy import Column, Integer, String, Boolean, DateTime
-from sqlalchemy.orm import relationship
+from sqlalchemy import Column, Integer, String, Boolean, DateTime, ForeignKey, Float
+from sqlalchemy.orm import relationship, backref
 from sqlalchemy.sql import func
 from database import Base
 
@@ -7,19 +7,281 @@ class Camera(Base):
     __tablename__ = "cameras"
 
     id = Column(Integer, primary_key=True, index=True)
-
-    name = Column(String, nullable=False)
+    name = Column(String, index=True)
     rtsp_url = Column(String, nullable=False)
-
+    sub_rtsp_url = Column(String, nullable=True)
     location = Column(String, nullable=True)
-
     is_active = Column(Boolean, default=True)
-
-    resolution_width = Column(Integer, default=1280)
-    resolution_height = Column(Integer, default=720)
-
+    rtsp_transport = Column(String, default="tcp") # tcp | udp
+    sub_rtsp_transport = Column(String, default="tcp") # tcp | udp
+    live_view_mode = Column(String, default="auto") # auto | webcodecs | mjpeg
+    status = Column(String, default="STARTING")
+    last_seen = Column(DateTime(timezone=True), nullable=True)
+    
+    # ONVIF Management
+    onvif_host = Column(String, nullable=True)
+    onvif_port = Column(Integer, default=80)
+    onvif_username = Column(String, nullable=True)
+    onvif_password = Column(String, nullable=True)
+    onvif_profile_token = Column(String, nullable=True)
+    onvif_manufacturer = Column(String, nullable=True)
+    onvif_model = Column(String, nullable=True)
+    onvif_firmware = Column(String, nullable=True)
+    onvif_serial = Column(String, nullable=True)
+    onvif_hw_id = Column(String, nullable=True)
+    
+    # PTZ Capabilities
+    ptz_can_pan_tilt = Column(Boolean, default=True)
+    ptz_can_zoom = Column(Boolean, default=True)
+    ptz_can_home = Column(Boolean, default=True)
+    onvif_can_events = Column(Boolean, default=False)
+    
+    # Video Device
+    resolution_width = Column(Integer, default=800)
+    resolution_height = Column(Integer, default=600)
     framerate = Column(Integer, default=15)
+    rotation = Column(Integer, default=0) # 0, 90, 180, 270
+    auto_resolution = Column(Boolean, default=True)
 
+    # Audio Capabilities
+    audio_enabled = Column(Boolean, default=False) # Detected via ONVIF
+    enable_audio = Column(Boolean, default=False)  # User preference for listening
+
+    # Text Overlay
+    text_left = Column(String, default="Camera Name")
+    text_right = Column(String, default="%Y-%m-%d %H:%M:%S")
+    text_scale = Column(Float, default=1.0)
+
+
+    
+
+    # Movies
+    movie_file_name = Column(String, default="%Y-%m-%d/%H-%M-%S")
+    movie_quality = Column(Integer, default=75)
+    movie_passthrough = Column(Boolean, default=False)
+    recording_mode = Column(String, default="Motion Triggered")
+    previous_recording_mode = Column(String, nullable=True)  # Stores mode before manual override
+    max_movie_length = Column(Integer, default=120)
+    record_audio = Column(Boolean, default=False)
+    preserve_movies = Column(String, default="For One Week")
+    max_storage_gb = Column(Float, default=0)  # 0 = unlimited
+
+    # Still Images
+    picture_file_name = Column(String, default="%Y-%m-%d/%H-%M-%S-%q")
+    picture_quality = Column(Integer, default=75)
+    picture_recording_mode = Column(String, default="Manual")
+    preserve_pictures = Column(String, default="Forever")
+    enable_manual_snapshots = Column(Boolean, default=True)
+    max_pictures_storage_gb = Column(Float, default=0)
+
+    # Motion Detection
+    threshold = Column(Integer, default=1500)
+    despeckle_filter = Column(Boolean, default=False)
+    motion_gap = Column(Integer, default=10) # seconds
+    captured_before = Column(Integer, default=2) # seconds
+    captured_after = Column(Integer, default=2) # seconds
+    min_motion_frames = Column(Integer, default=2)
+    show_frame_changes = Column(Boolean, default=True)
+    
+    # Advanced Motion Detection
+    auto_threshold_tuning = Column(Boolean, default=True)
+    auto_noise_detection = Column(Boolean, default=True)
+    light_switch_detection = Column(Integer, default=0)
+    mask = Column(Boolean, default=False)
+    privacy_masks = Column(String, nullable=True) # JSON array of polygons
+    motion_masks = Column(String, nullable=True)  # JSON array of polygons (exclusion zones)
+    create_debug_media = Column(Boolean, default=False)
+
+    # Notification Destinations
+    notify_webhook_url = Column(String, nullable=True)
+    notify_telegram_token = Column(String, nullable=True)
+    notify_telegram_chat_id = Column(String, nullable=True)
+    notify_email_address = Column(String, nullable=True)
+
+    # Health Notification Destinations (Overrides generic if set)
+    notify_health_webhook_url = Column(String, nullable=True)
+    notify_health_telegram_token = Column(String, nullable=True)
+    notify_health_telegram_chat_id = Column(String, nullable=True)
+    notify_health_email_recipient = Column(String, nullable=True)
+
+    notify_start_email = Column(Boolean, default=False)
+    notify_start_telegram = Column(Boolean, default=False)
+    notify_start_webhook = Column(Boolean, default=False)
+    notify_start_command = Column(Boolean, default=False)
+    notify_end_webhook = Column(Boolean, default=False)
+    notify_end_command = Column(Boolean, default=False)
+    
+    # Health Notifications
+    notify_health_email = Column(Boolean, default=False)
+    notify_health_telegram = Column(Boolean, default=False)
+    notify_health_webhook = Column(Boolean, default=False)
+    
+    notify_attach_image_email = Column(Boolean, default=True)
+    notify_attach_image_telegram = Column(Boolean, default=True)
+
+
+    # Schedule & Detection Settings
+    detect_motion_mode = Column(String, default="Always") # Always | Working Schedule | Manual Toggle
+    detect_engine = Column(String, default="OpenCV") # OpenCV | ONVIF Edge
+    
+    schedule_monday = Column(Boolean, default=True)
+    schedule_monday_start = Column(String, default="00:00")
+    schedule_monday_end = Column(String, default="23:59")
+    
+    schedule_tuesday = Column(Boolean, default=True)
+    schedule_tuesday_start = Column(String, default="00:00")
+    schedule_tuesday_end = Column(String, default="23:59")
+    
+    schedule_wednesday = Column(Boolean, default=True)
+    schedule_wednesday_start = Column(String, default="00:00")
+    schedule_wednesday_end = Column(String, default="23:59")
+    
+    schedule_thursday = Column(Boolean, default=True)
+    schedule_thursday_start = Column(String, default="00:00")
+    schedule_thursday_end = Column(String, default="23:59")
+    
+    schedule_friday = Column(Boolean, default=True)
+    schedule_friday_start = Column(String, default="00:00")
+    schedule_friday_end = Column(String, default="23:59")
+    
+    schedule_saturday = Column(Boolean, default=True)
+    schedule_saturday_start = Column(String, default="00:00")
+    schedule_saturday_end = Column(String, default="23:59")
+    
+    schedule_sunday = Column(Boolean, default=True)
+    schedule_sunday_start = Column(String, default="00:00")
+    schedule_sunday_end = Column(String, default="23:59")
+
+    # AI & Tracking
+    ai_enabled = Column(Boolean, default=False)
+    ai_object_types = Column(String, default='["person", "vehicle"]') # JSON list
+    ai_threshold = Column(Float, default=0.5)
+    ai_tracking_enabled = Column(Boolean, default=False)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
-    events = relationship("Event", back_populates="camera")
+    events = relationship("Event", back_populates="camera", cascade="all, delete-orphan")
+    
+    # Groups (Many-to-Many)
+    groups = relationship("CameraGroup", secondary="camera_group_association", back_populates="cameras")
+
+    # Client access (Many-to-Many)
+    clients = relationship("User", secondary="user_camera_association", back_populates="cameras")
+    
+    # Storage Profile
+    storage_profile_id = Column(Integer, ForeignKey("storage_profiles.id", ondelete="SET NULL"), nullable=True)
+    storage_profile = relationship("StorageProfile", back_populates="cameras")
+
+    @property
+    def client_user_ids(self) -> list[int]:
+        return [u.id for u in self.clients] if self.clients else []
+
+# Association Table
+class CameraGroupAssociation(Base):
+    __tablename__ = "camera_group_association"
+    camera_id = Column(Integer, ForeignKey("cameras.id", ondelete="CASCADE"), primary_key=True)
+    group_id = Column(Integer, ForeignKey("camera_groups.id", ondelete="CASCADE"), primary_key=True)
+
+class UserCameraAssociation(Base):
+    __tablename__ = "user_camera_association"
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), primary_key=True)
+    camera_id = Column(Integer, ForeignKey("cameras.id", ondelete="CASCADE"), primary_key=True)
+
+class CameraGroup(Base):
+    __tablename__ = "camera_groups"
+
+    id = Column(Integer, primary_key=True, index=True)
+    name = Column(String, unique=True, index=True)
+    description = Column(String, nullable=True)
+
+    cameras = relationship("Camera", secondary="camera_group_association", back_populates="groups")
+
+class StorageProfile(Base):
+    __tablename__ = "storage_profiles"
+
+    id = Column(Integer, primary_key=True, index=True)
+    name = Column(String, unique=True, index=True, nullable=False)
+    path = Column(String, nullable=False)
+    description = Column(String, nullable=True)
+    max_size_gb = Column(Float, default=0) # 0 = unlimited
+
+    cameras = relationship("Camera", back_populates="storage_profile")
+
+class Event(Base):
+    __tablename__ = "events"
+
+    id = Column(Integer, primary_key=True, index=True)
+    camera_id = Column(Integer, ForeignKey("cameras.id", ondelete="CASCADE"), index=True, nullable=False)
+    timestamp_start = Column(DateTime(timezone=True), nullable=False, index=True)
+    timestamp_end = Column(DateTime(timezone=True), nullable=True)
+    type = Column(String) # video | snapshot
+    event_type = Column(String) # motion | manual | scheduled
+    file_path = Column(String)
+    thumbnail_path = Column(String, nullable=True)
+    file_size = Column(Integer, default=0) # Size in bytes
+    width = Column(Integer, nullable=True)
+    height = Column(Integer, nullable=True)
+    motion_score = Column(Float, nullable=True)
+    ai_metadata = Column(String, nullable=True) # JSON object of detections
+    
+    camera = relationship("Camera", back_populates="events")
+
+class SystemSettings(Base):
+    __tablename__ = "system_settings"
+
+    id = Column(Integer, primary_key=True, index=True)
+    key = Column(String, unique=True, index=True, nullable=False)
+    value = Column(String, nullable=True)
+    description = Column(String, nullable=True)
+
+class User(Base):
+    __tablename__ = "users"
+
+    id = Column(Integer, primary_key=True, index=True)
+    username = Column(String, unique=True, index=True)
+    email = Column(String, unique=True, index=True)
+    hashed_password = Column(String)
+    role = Column(String, default="viewer") # "admin", "viewer", "client"
+    avatar_path = Column(String, nullable=True)
+    totp_secret = Column(String, nullable=True)
+    is_2fa_enabled = Column(Boolean, default=False)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+    # Client access (Many-to-Many)
+    cameras = relationship("Camera", secondary="user_camera_association", back_populates="clients")
+
+class ApiToken(Base):
+    __tablename__ = "api_tokens"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    name = Column(String, nullable=False)  # Configurable name
+    token_hash = Column(String, unique=True, index=True, nullable=False)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    last_used_at = Column(DateTime(timezone=True), nullable=True)
+    created_by_user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"))
+    expires_at = Column(DateTime(timezone=True), nullable=True)
+    is_active = Column(Boolean, default=True)
+    
+    created_by = relationship("User")
+
+class TrustedDevice(Base):
+    __tablename__ = "trusted_devices"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    token = Column(String, unique=True, index=True, nullable=False)
+    name = Column(String, nullable=True) # e.g. "Chrome on Linux"
+    last_used = Column(DateTime(timezone=True), server_default=func.now())
+    expires_at = Column(DateTime(timezone=True), nullable=True) # Optional, can rely on manual revocation or cleanup job
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+    user = relationship("User", backref="trusted_devices")
+
+class RecoveryCode(Base):
+    __tablename__ = "recovery_codes"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    code_hash = Column(String, unique=True, index=True, nullable=False)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+    user = relationship("User", backref=backref("recovery_codes", cascade="all, delete-orphan"))
