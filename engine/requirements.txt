@@ -1,0 +1,10 @@
+av
+fastapi
+uvicorn[standard]
+websockets
+requests
+python-multipart
+psutil
+numpy<2
+tflite-runtime==2.5.0.post1
+onnxruntime-gpu==1.19.2
