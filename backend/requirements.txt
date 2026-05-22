@@ -1,0 +1,15 @@
+fastapi
+uvicorn
+sqlalchemy
+psycopg2-binary
+pydantic
+requests
+httpx
+python-multipart
+pyotp
+passlib[argon2]
+PyJWT[crypto]
+psutil
+slowapi
+python-magic
+websockets

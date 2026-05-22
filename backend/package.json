@@ -1,0 +1,6 @@
+{
+    "name": "watchx-backend",
+  "version": "1.28.6",
+    "description": "WatchX Backend API",
+    "license": "MIT"
+}

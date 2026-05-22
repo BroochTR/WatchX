@@ -1,5 +1,5 @@
 #!/bin/bash
-# watchxBackend Entrypoint
+# WatchX Backend Entrypoint
 # This script ensures signal propagation (SIGTERM) to the Uvicorn process
 
 # Function to log with timestamp
@@ -30,7 +30,7 @@ uvicorn main:app --host 0.0.0.0 --port 5000 2>&1 | tee -a /data/logs/backend.log
 MAIN_PID=$!
 
 # Trap signals and forward them to the process
-trap "log 'Terminating watchxBackend...'; kill -TERM $MAIN_PID" INT TERM
+trap "log 'Terminating WatchX Backend...'; kill -TERM $MAIN_PID" INT TERM
 
 # Wait for the process to exit
 wait $MAIN_PID
