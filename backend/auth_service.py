@@ -35,7 +35,7 @@ def verify_totp(secret: str, code: str):
     return totp.verify(code, valid_window=1)
 
 def get_totp_uri(secret: str, username: str):
-    return pyotp.TOTP(secret).provisioning_uri(name=username, issuer_name="watchx")
+    return pyotp.TOTP(secret).provisioning_uri(name=username, issuer_name="WatchX")
 
 def create_access_token(data: dict, expires_delta: Optional[timedelta] = None):
     to_encode = data.copy()
