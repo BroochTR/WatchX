@@ -18,24 +18,6 @@ class Camera(Base):
     status = Column(String, default="STARTING")
     last_seen = Column(DateTime(timezone=True), nullable=True)
     
-    # ONVIF Management
-    onvif_host = Column(String, nullable=True)
-    onvif_port = Column(Integer, default=80)
-    onvif_username = Column(String, nullable=True)
-    onvif_password = Column(String, nullable=True)
-    onvif_profile_token = Column(String, nullable=True)
-    onvif_manufacturer = Column(String, nullable=True)
-    onvif_model = Column(String, nullable=True)
-    onvif_firmware = Column(String, nullable=True)
-    onvif_serial = Column(String, nullable=True)
-    onvif_hw_id = Column(String, nullable=True)
-    
-    # PTZ Capabilities
-    ptz_can_pan_tilt = Column(Boolean, default=True)
-    ptz_can_zoom = Column(Boolean, default=True)
-    ptz_can_home = Column(Boolean, default=True)
-    onvif_can_events = Column(Boolean, default=False)
-    
     # Video Device
     resolution_width = Column(Integer, default=800)
     resolution_height = Column(Integer, default=600)
@@ -44,7 +26,7 @@ class Camera(Base):
     auto_resolution = Column(Boolean, default=True)
 
     # Audio Capabilities
-    audio_enabled = Column(Boolean, default=False) # Detected via ONVIF
+    audio_enabled = Column(Boolean, default=False)
     enable_audio = Column(Boolean, default=False)  # User preference for listening
 
     # Text Overlay
@@ -122,7 +104,7 @@ class Camera(Base):
 
     # Schedule & Detection Settings
     detect_motion_mode = Column(String, default="Always") # Always | Working Schedule | Manual Toggle
-    detect_engine = Column(String, default="OpenCV") # OpenCV | ONVIF Edge
+    detect_engine = Column(String, default="OpenCV") # OpenCV | AI
     
     schedule_monday = Column(Boolean, default=True)
     schedule_monday_start = Column(String, default="00:00")
