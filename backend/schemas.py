@@ -31,7 +31,7 @@ class TestNotificationConfig(BaseModel):
                             return self
                     if ip_addr.is_loopback or ip_addr.is_private or ip_addr.is_reserved or ip_addr.is_link_local:
                         # Skip strictly blocking for local lab/test environments if explicitly intended
-                        # In a real production SaaS this should be True, but for watchx local it's often needed.
+                        # In a real production SaaS this should be True, but for local WatchX it is often needed.
                         pass 
                 except Exception as e:
                     if isinstance(e, ValueError): raise e
@@ -55,24 +55,6 @@ class CameraBase(BaseModel):
     # Audio Capabilities
     audio_enabled: bool = False
     enable_audio: bool = False
-
-    # ONVIF Management
-    onvif_host: Optional[str] = None
-    onvif_port: Optional[int] = 80
-    onvif_username: Optional[str] = None
-    onvif_password: Optional[str] = None
-    onvif_profile_token: Optional[str] = None
-    onvif_manufacturer: Optional[str] = None
-    onvif_model: Optional[str] = None
-    onvif_firmware: Optional[str] = None
-    onvif_serial: Optional[str] = None
-    onvif_hw_id: Optional[str] = None
-    
-    # PTZ Capabilities
-    ptz_can_pan_tilt: bool = True
-    ptz_can_zoom: bool = True
-    ptz_can_home: bool = True
-    onvif_can_events: bool = False
 
     # Video Device
     resolution_width: Optional[int] = 800
@@ -197,7 +179,7 @@ class CameraBase(BaseModel):
 
     # Schedule
     detect_motion_mode: Optional[str] = "Always"
-    detect_engine: Optional[str] = "OpenCV" # OpenCV | ONVIF Edge
+    detect_engine: Optional[str] = "OpenCV" # OpenCV | AI
 
     
     schedule_monday: Optional[bool] = True
@@ -387,14 +369,14 @@ class CameraBase(BaseModel):
                  raise ValueError('Webhook cannot target localhost')
 
             # Resolve IP to check for private networks (Basic SSRF protection)
-            # Note: This has race conditions (DNS rebinding) but good for "watchx Coding" level
+            # Note: This has race conditions (DNS rebinding) but is acceptable for local WatchX setups
             try:
                 ip_str = socket.gethostbyname(hostname)
                 ip = ipaddress.ip_address(ip_str)
                 if ip.is_loopback or ip.is_private or ip.is_reserved:
                     # Strict SSRF Protection: Block access to internal/private networks
                     # This prevents targeting other containers (db, engine) or local services.
-                    # Exception: User might need local IPs for Home Assistant, 
+                    # Exception: User might need local IPs for trusted local integrations,
                     # but for security we block by default.
                     raise ValueError(f'Webhook cannot target private or reserved IP ranges ({ip_str})')
             except socket.gaierror:
@@ -553,10 +535,6 @@ class CameraSummary(BaseModel):
     audio_enabled: bool
     enable_audio: bool
     record_audio: bool
-    # PTZ Capabilities
-    ptz_can_pan_tilt: bool = True
-    ptz_can_zoom: bool = True
-    ptz_can_home: bool = True
     detect_engine: str = "OpenCV"
     
     # AI & Tracking
@@ -624,98 +602,3 @@ class TrustedDevice(BaseModel):
 
 
 
-# ONVIF Discovery
-class OnvifScanRequest(BaseModel):
-    ip_range: str # e.g. "192.168.1.0/24" or "192.168.1.1-100"
-    user: Optional[str] = ""
-    password: Optional[str] = ""
-
-    @field_validator('ip_range')
-    @classmethod
-    def validate_ip_range(cls, v: str) -> str:
-        if v:
-            # Allow CIDR or Range format, basic sanitization
-            import re
-            if not re.match(r'^[\d\.\-\/ ]+$', v):
-                raise ValueError('Invalid IP range format')
-        return v
-
-class OnvifDeepScanRequest(BaseModel):
-    ip: str
-    user: Optional[str] = ""
-    password: Optional[str] = ""
-
-    @field_validator('ip')
-    @classmethod
-    def validate_ip(cls, v: str) -> str:
-        if not v:
-            raise ValueError('IP address is required')
-        v = v.strip()
-        import ipaddress
-        import socket
-        try:
-            ipaddress.ip_address(v)
-        except ValueError:
-            # Check if it's a valid hostname
-            try:
-                socket.gethostbyname(v)
-            except socket.gaierror:
-                raise ValueError('Invalid IP address or unreachable hostname')
-        return v
-
-class OnvifProbeRequest(BaseModel):
-    ip: str
-    port: int
-    user: Optional[str] = ""
-    password: Optional[str] = ""
-
-    @field_validator('port')
-    @classmethod
-    def validate_port(cls, v: int) -> int:
-        if v <= 0:
-            raise ValueError('Port must be a positive integer')
-        return v
-
-    @field_validator('ip')
-    @classmethod
-    def validate_ip(cls, v: str) -> str:
-        if not v:
-            raise ValueError('IP address is required')
-        v = v.strip()
-        import ipaddress
-        import socket
-        try:
-            ipaddress.ip_address(v)
-        except ValueError:
-            # Check if it's a valid hostname
-            try:
-                socket.gethostbyname(v)
-            except socket.gaierror:
-                raise ValueError('Invalid IP address or unreachable hostname')
-        return v
-
-class OnvifProfile(BaseModel):
-    name: str
-    token: str
-    url: str
-
-class OnvifDeviceDetails(BaseModel):
-    ip: str
-    port: int
-    manufacturer: Optional[str] = None
-    model: Optional[str] = None
-    firmware: Optional[str] = None
-    serial: Optional[str] = None
-    hw_id: Optional[str] = None
-    profiles: List[OnvifProfile] = []
-    features: Optional[Dict[str, bool]] = None
-    auth_required: bool = False
-
-# PTZ Controls
-class PTZMoveRequest(BaseModel):
-    pan: float = 0.0  # -1.0 to 1.0
-    tilt: float = 0.0 # -1.0 to 1.0
-    zoom: float = 0.0 # -1.0 to 1.0
-
-class PTZGotoPresetRequest(BaseModel):
-    preset_token: str
