@@ -1,0 +1,504 @@
+from fastapi import APIRouter, Depends
+from sqlalchemy.orm import Session
+import shutil
+import requests, time, psutil, os, logging, threading
+from settings_service import get_setting
+from datetime import datetime, timedelta
+from collections import deque
+from sqlalchemy import func
+import crud, database, schemas, models, auth_service
+
+router = APIRouter(
+    prefix="/stats",
+    tags=["stats"],
+)
+
+START_TIME = time.time()
+
+# In-memory storage for resource history (up to last 24 hours, sampled once per minute)
+RESOURCE_HISTORY = deque(maxlen=1440)
+RESOURCE_HISTORY_LOCK = threading.Lock()
+
+def collect_resource_stats(last_net_recv=None, last_net_sent=None, check_duration_sec=60):
+    """Collect CPU/RAM/Net stats and store in history. Called every minute."""
+    try:
+        # Backend stats
+        backend_process = psutil.Process(os.getpid())
+        backend_cpu = backend_process.cpu_percent(interval=0.1)
+        backend_mem_mb = backend_process.memory_info().rss / (1024 * 1024)
+        
+        # Engine stats
+        engine_cpu = 0
+        engine_mem_mb = 0
+        engine_net_recv = 0
+        engine_net_sent = 0
+        try:
+            engine_resp = requests.get("http://engine:8000/stats", timeout=2)
+            if engine_resp.status_code == 200:
+                engine_data = engine_resp.json()
+                engine_cpu = engine_data.get("cpu_percent", 0)
+                engine_mem_mb = engine_data.get("memory_mb", 0)
+                engine_net_recv = engine_data.get("network_recv", 0)
+                engine_net_sent = engine_data.get("network_sent", 0)
+        except:
+            pass
+        
+        # Network stats (Global system-wide = Backend + Engine)
+        net_io = psutil.net_io_counters()
+        # Sum backend + engine bytes. 
+        # Note: This might double count internal traffic between them, but ensures external camera traffic is seen.
+        current_net_recv = net_io.bytes_recv + engine_net_recv
+        current_net_sent = net_io.bytes_sent + engine_net_sent
+        
+        net_recv_mbps = 0.0
+        net_sent_mbps = 0.0
+        
+        if last_net_recv is not None and last_net_sent is not None:
+             # Calculate MB/s based on difference since last check
+             diff_recv = current_net_recv - last_net_recv
+             diff_sent = current_net_sent - last_net_sent
+             
+             # Handle counter resets (if container restarted)
+             if diff_recv < 0: diff_recv = 0
+             if diff_sent < 0: diff_sent = 0
+             
+             net_recv_mbps = round((diff_recv / (1024 * 1024)) / check_duration_sec, 2)
+             net_sent_mbps = round((diff_sent / (1024 * 1024)) / check_duration_sec, 2)
+        
+        data_point = {
+            "timestamp": datetime.now().isoformat(),
+            "cpu_percent": round(backend_cpu + engine_cpu, 1),
+            "memory_mb": round(backend_mem_mb + engine_mem_mb, 1),
+            "backend_cpu": round(backend_cpu, 1),
+            "engine_cpu": engine_cpu,
+            "backend_mem_mb": round(backend_mem_mb, 1),
+            "engine_mem_mb": engine_mem_mb,
+            "network_recv_mbps": net_recv_mbps,
+            "network_sent_mbps": net_sent_mbps
+        }
+        
+        with RESOURCE_HISTORY_LOCK:
+            RESOURCE_HISTORY.append(data_point)
+            
+        return current_net_recv, current_net_sent
+            
+    except Exception as e:
+        print(f"Error collecting resource stats: {e}")
+        return last_net_recv, last_net_sent
+
+def start_resource_collector():
+    """Background thread to collect stats every minute"""
+    def collector_loop():
+        # Initialize baseline
+        last_net_recv = None
+        last_net_sent = None
+        
+        # Collect first point immediately (Network will be 0 MB/s due to 0 interval)
+        last_net_recv, last_net_sent = collect_resource_stats(last_net_recv, last_net_sent, 1)
+        
+        while True:
+            time.sleep(60)  # Collect every minute
+            last_net_recv, last_net_sent = collect_resource_stats(last_net_recv, last_net_sent, 60)
+    
+    thread = threading.Thread(target=collector_loop, daemon=True)
+    thread.start()
+
+# Start the collector on module load
+start_resource_collector()
+
+# Real-time Network Speed State (Updated every 2s)
+CURRENT_NET_SPEED = {
+    "recv_mbps": 0.0,
+    "sent_mbps": 0.0
+}
+_realtime_net_lock = threading.Lock()
+
+def start_realtime_collector():
+    """Background thread to calculate current network speed every 2 seconds"""
+    def collector_loop():
+        last_time = time.time()
+        backend_proc = psutil.Process(os.getpid())
+        
+        # Initial counters
+        net_io = psutil.net_io_counters()
+        last_recv = net_io.bytes_recv
+        last_sent = net_io.bytes_sent
+        
+        # Try to get engine initial if possible
+        try:
+            resp = requests.get("http://engine:8000/stats", timeout=1)
+            if resp.status_code == 200:
+                data = resp.json()
+                last_recv += data.get("network_recv", 0)
+                last_sent += data.get("network_sent", 0)
+        except:
+             pass
+
+        while True:
+            time.sleep(2)
+            try:
+                now_time = time.time()
+                delta_time = now_time - last_time
+                if delta_time <= 0: continue
+                
+                # Get current stats
+                net_io = psutil.net_io_counters()
+                curr_recv = net_io.bytes_recv
+                curr_sent = net_io.bytes_sent
+                
+                # Add Engine stats
+                try:
+                    resp = requests.get("http://engine:8000/stats", timeout=1)
+                    if resp.status_code == 200:
+                        data = resp.json()
+                        curr_recv += data.get("network_recv", 0)
+                        curr_sent += data.get("network_sent", 0)
+                except:
+                    pass
+                
+                # Calculate diff
+                diff_recv = curr_recv - last_recv
+                diff_sent = curr_sent - last_sent
+                
+                # Handle restarts/overflows
+                if diff_recv < 0: diff_recv = 0
+                if diff_sent < 0: diff_sent = 0
+                
+                # MB/s
+                recv_mbps = round((diff_recv / (1024*1024)) / delta_time, 2)
+                sent_mbps = round((diff_sent / (1024*1024)) / delta_time, 2)
+                
+                with _realtime_net_lock:
+                    CURRENT_NET_SPEED["recv_mbps"] = recv_mbps
+                    CURRENT_NET_SPEED["sent_mbps"] = sent_mbps
+                
+                # Update baseline
+                last_recv = curr_recv
+                last_sent = curr_sent
+                last_time = now_time
+                
+            except Exception as e:
+                print(f"Error in realtime net collector: {e}")
+                time.sleep(5) # Backoff on error
+
+    thread = threading.Thread(target=collector_loop, daemon=True)
+    thread.start()
+
+# Start collectors
+start_realtime_collector()
+
+@router.get("")
+def get_stats(db: Session = Depends(database.get_db), auth_info: tuple[models.User, bool] = Depends(auth_service.get_current_user_or_token)):
+    user, is_token = auth_info
+    from sqlalchemy import func, text
+    
+    # 1. Active Cameras
+    cameras = crud.get_cameras(db, skip=0, limit=1000)
+    active_cameras_count = len([c for c in cameras if c.is_active])
+
+    # 2. Detailed Storage Stats
+    # Global counts and sizes
+    global_videos = db.query(func.count(models.Event.id), func.sum(models.Event.file_size)).filter(models.Event.type == "video").first()
+    global_pics = db.query(func.count(models.Event.id), func.sum(models.Event.file_size)).filter(models.Event.type == "snapshot").first()
+    
+    global_stats = {
+        "videos": {"count": global_videos[0] or 0, "size_gb": round((global_videos[1] or 0) / (1024**3), 2)},
+        "images": {"count": global_pics[0] or 0, "size_gb": round((global_pics[1] or 0) / (1024**3), 2)}
+    }
+
+    # Per-camera stats
+    camera_stats = {}
+    for cam in cameras:
+        cam_videos = db.query(func.count(models.Event.id), func.sum(models.Event.file_size)).filter(models.Event.camera_id == cam.id, models.Event.type == "video").first()
+        cam_pics = db.query(func.count(models.Event.id), func.sum(models.Event.file_size)).filter(models.Event.camera_id == cam.id, models.Event.type == "snapshot").first()
+        
+        camera_stats[cam.id] = {
+            "videos": {"count": cam_videos[0] or 0, "size_gb": round((cam_videos[1] or 0) / (1024**3), 2)},
+            "images": {"count": cam_pics[0] or 0, "size_gb": round((cam_pics[1] or 0) / (1024**3), 2)}
+        }
+
+    # 3. Storage Usage (Global Disk + WatchX Media)
+    storage_path = "/data"
+    try:
+        # Physical disk stats
+        total, used_physical, free = shutil.disk_usage(storage_path)
+        storage_total_gb = round(total / (2**30), 1)
+        storage_free_gb = round(free / (2**30), 1)
+        
+        # WatchX application usage (videos + images)
+        watchx_used_bytes = (global_videos[1] or 0) + (global_pics[1] or 0)
+        storage_used_gb = round(watchx_used_bytes / (1024**3), 2)
+        
+        # Percent is WatchX usage / total disk (frontend may compare against quota)
+        storage_percent = round((watchx_used_bytes / total) * 100) if total > 0 else 0
+        
+    except Exception as e:
+        print(f"Error getting disk usage: {e}")
+        storage_total_gb = storage_used_gb = storage_free_gb = storage_percent = 0
+
+    # ----------------------------------------------------
+    # Retention Estimation Logic
+    # ----------------------------------------------------
+    now = datetime.now()
+    one_day_ago = now - timedelta(days=1)
+    
+    # Calculate Daily "Burn Rate" (GB/day) based on last 24h of recordings (Video + Snapshots)
+    # Group by camera to be precise
+    daily_stats_query = db.query(models.Event.camera_id, func.sum(models.Event.file_size))\
+        .filter(models.Event.timestamp_start >= one_day_ago)\
+        .group_by(models.Event.camera_id).all()
+    
+    daily_usage_map = {cam_id: (float(size) if size is not None else 0.0) for cam_id, size in daily_stats_query}
+    global_daily_bytes = sum(daily_usage_map.values())
+    global_daily_gb = global_daily_bytes / (1024**3)
+
+    # Simple 24h count
+    events_24h = db.query(func.count(models.Event.id))\
+        .filter(models.Event.timestamp_start >= one_day_ago)\
+        .scalar() or 0
+
+    # Get Global Limit setting
+    global_limit_row = db.query(models.SystemSettings).filter(models.SystemSettings.key == "max_global_storage_gb").first()
+    max_global_gb = float(global_limit_row.value) if global_limit_row and global_limit_row.value else 0
+
+    # Global Estimation
+    global_retention_days = None
+    if global_daily_gb > 0.1: # Threshold to avoid div by zero/noise
+        # If global limit is set, use it. Otherwise use physical free space + used by WatchX (total available to app)
+        available_gb = max_global_gb if max_global_gb > 0 else storage_total_gb
+        global_retention_days = round(available_gb / global_daily_gb, 1)
+
+    # Enhance Camera Stats with specific estimates
+    for cam in cameras:
+        d_bytes = daily_usage_map.get(cam.id, 0)
+        d_gb = d_bytes / (1024**3)
+        est_days = None
+        
+        if d_gb > 0.01:
+            # If camera has specific quota
+            if cam.max_storage_gb > 0:
+                est_days = round(cam.max_storage_gb / d_gb, 1)
+            else:
+                # If no specific quota, it's limited by Global or Disk
+                # To be conservative, show Global Estimate
+                est_days = global_retention_days
+
+        if cam.id in camera_stats:
+            camera_stats[cam.id]["daily_rate_gb"] = round(d_gb, 2)
+            camera_stats[cam.id]["estimated_retention_days"] = est_days
+
+    # 4. Calculate Required Storage for Configured Retention
+    # Map retention settings to days
+    RETENTION_DAYS_MAP = {
+        "For One Day": 1,
+        "For One Week": 7,
+        "For One Month": 30,
+        "For One Year": 365,
+        "Forever": None
+    }
+    
+    # Get the most common retention setting across cameras, or use a default
+    # For simplicity, use the first active camera's setting or fallback
+    configured_retention_setting = None
+    for cam in cameras:
+        if cam.preserve_videos and cam.preserve_videos in RETENTION_DAYS_MAP:
+            configured_retention_setting = cam.preserve_videos
+            break
+    
+    configured_retention_days = RETENTION_DAYS_MAP.get(configured_retention_setting) if configured_retention_setting else None
+    required_storage_gb = None
+    if configured_retention_days and global_daily_gb > 0.01:
+        required_storage_gb = round(global_daily_gb * configured_retention_days, 1)
+
+    # 5. System Uptime
+    uptime_seconds = int(time.time() - START_TIME)
+    uptime_str = f"{uptime_seconds // 86400}d {(uptime_seconds % 86400) // 3600}h {(uptime_seconds % 3600) // 60}m"
+
+    # 6. Resource Usage (CPU/Memory for WatchX app only)
+    # Backend process stats
+    backend_process = psutil.Process(os.getpid())
+    backend_cpu = backend_process.cpu_percent(interval=0.1)
+    backend_mem_mb = backend_process.memory_info().rss / (1024 * 1024)
+    
+    # Engine stats (from its /stats endpoint)
+    engine_stats = None
+    engine_cpu = 0
+    engine_mem_mb = 0
+    try:
+        engine_resp = requests.get("http://engine:8000/stats", timeout=2)
+        if engine_resp.status_code == 200:
+            engine_stats = engine_resp.json()
+            engine_cpu = engine_stats.get("cpu_percent", 0)
+            engine_mem_mb = engine_stats.get("memory_mb", 0)
+    except:
+        pass  # Engine unreachable
+
+    # Total app resources
+    total_cpu = round(backend_cpu + engine_cpu, 1)
+    total_mem_mb = round(backend_mem_mb + engine_mem_mb, 1)
+
+    # Network Rate Calculation (Read from background thread)
+    recv_mbps = 0.0
+    sent_mbps = 0.0
+    with _realtime_net_lock:
+        recv_mbps = CURRENT_NET_SPEED["recv_mbps"]
+        sent_mbps = CURRENT_NET_SPEED["sent_mbps"]
+
+    # Database Size
+    db_size_mb = 0
+    try:
+        # Postgres specific
+        result = db.execute(text("SELECT pg_database_size(current_database())")).fetchone()
+        if result:
+            db_size_mb = round(result[0] / (1024*1024), 1)
+    except Exception as e:
+        print(f"Error getting DB size: {e}")
+
+    # 7. System Health Calculation
+    total_errors = len([c for c in cameras if c.status in ("UNREACHABLE", "UNAUTHORIZED") and c.is_active])
+    system_status = "Healthy" if total_errors == 0 else "Issues Detected"
+    if active_cameras_count == 0 and len(cameras) > 0:
+        system_status = "Standby"
+
+    ai_status = {"hardware": "unknown", "initialized": False}
+    network_peak_24h_mbps = max(recv_mbps + sent_mbps, 0.0)
+
+    with RESOURCE_HISTORY_LOCK:
+        if RESOURCE_HISTORY:
+            history_peak = max(
+                (item.get("network_recv_mbps", 0) + item.get("network_sent_mbps", 0))
+                for item in RESOURCE_HISTORY
+            )
+            network_peak_24h_mbps = round(max(network_peak_24h_mbps, history_peak), 2)
+
+    if engine_stats:
+        ai_status = engine_stats.get("ai_status", ai_status)
+
+    return {
+        "active_cameras": active_cameras_count,
+        "total_errors": total_errors,
+        "total_events": (global_videos[0] or 0) + (global_pics[0] or 0),
+        "events_24h": events_24h,
+        "video_count": global_videos[0] or 0,
+        "picture_count": global_pics[0] or 0,
+        "storage": {
+            "total_gb": storage_total_gb,
+            "used_gb": storage_used_gb,
+            "free_gb": storage_free_gb,
+            "percent": storage_percent,
+            "estimated_retention_days": global_retention_days,
+            "daily_rate_gb": round(global_daily_gb, 2),
+            "configured_retention": configured_retention_setting,
+            "configured_retention_days": configured_retention_days,
+            "required_storage_gb": required_storage_gb,
+            "total_quota_gb": max_global_gb,
+            "quota_percent": round((storage_used_gb / max_global_gb) * 100) if max_global_gb > 0 else 0
+        },
+        "resources": {
+            "cpu_percent": total_cpu,
+            "memory_mb": total_mem_mb,
+            "backend_cpu": round(backend_cpu, 1),
+            "backend_mem_mb": round(backend_mem_mb, 1),
+            "engine_cpu": engine_cpu,
+            "engine_mem_mb": engine_mem_mb
+        },
+        "network": {
+            "recv_mbps": recv_mbps,
+            "sent_mbps": sent_mbps,
+            "peak_last_24h_mbps": network_peak_24h_mbps
+        },
+        "engine": {
+            "status": "ONLINE" if engine_stats else "OFFLINE",
+            "hw_accel": engine_stats.get("hw_accel", False) if engine_stats else False,
+            "hw_accel_type": engine_stats.get("hw_accel_type", "N/A") if engine_stats else "N/A",
+            "gpu": engine_stats.get("gpu") if engine_stats else None,
+            "ai": ai_status
+        },
+        "database": {
+            "size_mb": db_size_mb,
+            "event_count": (global_videos[0] or 0) + (global_pics[0] or 0)
+        },
+        "details": {
+            "global": global_stats,
+            "cameras": camera_stats
+        },
+        "system_status": system_status,
+        "uptime": uptime_str,
+        "hw_accel": {
+            "enabled": engine_stats.get("hw_accel", False) if engine_stats else False,
+            "type": engine_stats.get("hw_accel_type", "N/A") if engine_stats else "N/A",
+            "status": "ACTIVE" if (engine_stats and engine_stats.get("hw_accel")) else "INACTIVE"
+        }
+    }
+
+@router.get("/history")
+def get_stats_history(db: Session = Depends(database.get_db), auth_info: tuple[models.User, bool] = Depends(auth_service.get_current_user_or_token)):
+    user, is_token = auth_info
+    """
+    Returns hourly event counts for the last 24 hours.
+    """
+    now = datetime.now()
+    twenty_four_hours_ago = now - timedelta(hours=24)
+    
+    # Query for events in the last 24h
+    try:
+        # Group by hour
+        # Postgres: date_trunc('hour', timestamp)
+        # SQLite: strftime('%Y-%m-%d %H:00:00', timestamp)
+        # To be safe/simple with ORM without worrying about dialect specifics too much,
+        # we can fetch the events (id, type, timestamp) and aggregate in Python.
+        # Given this is NVR, 24h events could be 10k+. Python agg is fine for 10k items.
+        
+        events = db.query(models.Event.timestamp_start, models.Event.type)\
+            .filter(models.Event.timestamp_start >= twenty_four_hours_ago)\
+            .all()
+            
+        # Initialize buckets for last 24h
+        history = {}
+        # Pre-fill with 0
+        for i in range(25):
+            t = now - timedelta(hours=i)
+            key = t.strftime("%H:00")
+            history[key] = {"events": 0, "videos": 0}
+            
+        for evt in events:
+            if not evt.timestamp_start:
+                continue
+            key = evt.timestamp_start.strftime("%H:00")
+            # We might need to handle timezone if DB is UTC and local is not
+            # But usually naive datetimes in DB match logic.
+            # If the key isn't in history (slightly out of bounds due to minute diff), skip or find nearest.
+            if key in history:
+                history[key]["events"] += 1
+                if evt.type == 'video':
+                    history[key]["videos"] += 1
+        
+        # Convert to list sorted by time
+        data = []
+        # sort keys by time?
+        # Construct list from 24h ago to now
+        for i in range(24, -1, -1):
+            t = now - timedelta(hours=i)
+            key = t.strftime("%H:00")
+            if key in history:
+                data.append({
+                    "time": key,
+                    "events": history[key]["events"],
+                    "videos": history[key]["videos"]
+                })
+        
+        return data
+
+    except Exception as e:
+        print(f"Error generating history stats: {e}")
+        return []
+
+@router.get("/resources-history")
+def get_resources_history(auth_info: tuple[models.User, bool] = Depends(auth_service.get_current_user_or_token)):
+    user, is_token = auth_info
+    """
+    Returns CPU and memory usage history for the last hour (up to 60 data points).
+    Data is collected every minute by a background thread.
+    """
+    with RESOURCE_HISTORY_LOCK:
+        return list(RESOURCE_HISTORY)[-60:]
