@@ -37,15 +37,15 @@ class Camera(Base):
 
     
 
-    # Movies
-    movie_file_name = Column(String, default="%Y-%m-%d/%H-%M-%S")
-    movie_quality = Column(Integer, default=75)
-    movie_passthrough = Column(Boolean, default=False)
+    # Videos
+    video_file_name = Column(String, default="%Y-%m-%d/%H-%M-%S")
+    video_quality = Column(Integer, default=75)
+    video_passthrough = Column(Boolean, default=False)
     recording_mode = Column(String, default="Motion Triggered")
     previous_recording_mode = Column(String, nullable=True)  # Stores mode before manual override
-    max_movie_length = Column(Integer, default=120)
+    max_video_length = Column(Integer, default=120)
     record_audio = Column(Boolean, default=False)
-    preserve_movies = Column(String, default="For One Week")
+    preserve_videos = Column(String, default="For One Week")
     max_storage_gb = Column(Float, default=0)  # 0 = unlimited
 
     # Still Images
@@ -148,10 +148,6 @@ class Camera(Base):
 
     # Client access (Many-to-Many)
     clients = relationship("User", secondary="user_camera_association", back_populates="cameras")
-    
-    # Storage Profile
-    storage_profile_id = Column(Integer, ForeignKey("storage_profiles.id", ondelete="SET NULL"), nullable=True)
-    storage_profile = relationship("StorageProfile", back_populates="cameras")
 
     @property
     def client_user_ids(self) -> list[int]:
@@ -176,17 +172,6 @@ class CameraGroup(Base):
     description = Column(String, nullable=True)
 
     cameras = relationship("Camera", secondary="camera_group_association", back_populates="groups")
-
-class StorageProfile(Base):
-    __tablename__ = "storage_profiles"
-
-    id = Column(Integer, primary_key=True, index=True)
-    name = Column(String, unique=True, index=True, nullable=False)
-    path = Column(String, nullable=False)
-    description = Column(String, nullable=True)
-    max_size_gb = Column(Float, default=0) # 0 = unlimited
-
-    cameras = relationship("Camera", back_populates="storage_profile")
 
 class Event(Base):
     __tablename__ = "events"

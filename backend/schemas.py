@@ -47,7 +47,6 @@ class CameraBase(BaseModel):
     rtsp_transport: Optional[str] = "tcp" # tcp | udp
     sub_rtsp_transport: Optional[str] = "tcp" # tcp | udp
     live_view_mode: Optional[str] = "auto" # auto | webcodecs | mjpeg
-    storage_profile_id: Optional[int] = None
     status: Optional[str] = "STARTING"
     last_seen: Optional[datetime] = None
     client_user_ids: Optional[List[int]] = None
@@ -72,15 +71,15 @@ class CameraBase(BaseModel):
 
 
 
-    # Movies
-    movie_file_name: Optional[str] = "%Y-%m-%d/%H-%M-%S"
-    movie_quality: Optional[int] = 75
-    movie_passthrough: Optional[bool] = False
+    # Videos
+    video_file_name: Optional[str] = "%Y-%m-%d/%H-%M-%S"
+    video_quality: Optional[int] = 75
+    video_passthrough: Optional[bool] = False
     recording_mode: Optional[str] = "Motion Triggered"
     previous_recording_mode: Optional[str] = None
-    max_movie_length: Optional[int] = 120  # Default 2 minutes, range 60-300 (1-5 min)
+    max_video_length: Optional[int] = 120  # Default 2 minutes, range 60-300 (1-5 min)
     record_audio: bool = False
-    preserve_movies: Optional[str] = "For One Week"
+    preserve_videos: Optional[str] = "For One Week"
     max_storage_gb: Optional[float] = 0  # 0 = unlimited
 
     # Still Images
@@ -318,16 +317,16 @@ class CameraBase(BaseModel):
 
 
 
-    @field_validator('max_movie_length')
+    @field_validator('max_video_length')
     @classmethod
-    def validate_max_movie_length(cls, v: Optional[int]) -> Optional[int]:
+    def validate_max_video_length(cls, v: Optional[int]) -> Optional[int]:
         if v is None or v == 0 or v > 300:
             return 300  # Cap at 5 minutes max
         if v < 60:
             return 60   # Minimum 1 minute
         return v
 
-    @field_validator('movie_file_name', 'picture_file_name')
+    @field_validator('video_file_name', 'picture_file_name')
     @classmethod
     def prevent_path_traversal(cls, v: Optional[str]) -> Optional[str]:
         if v and ('..' in v or v.strip().startswith('/') or v.strip().startswith('\\')):
@@ -408,7 +407,6 @@ class Camera(CameraBase):
     id: int
     created_at: datetime
     groups: list[CameraGroupBase] = []
-    storage_profile: Optional["StorageProfile"] = None
 
 class EventBase(BaseModel):
     camera_id: int
@@ -489,30 +487,6 @@ class Disable2FARequest(BaseModel):
 class CameraGroup(CameraGroupBase):
     id: int
     cameras: list[Camera] = []
-
-# Storage Profiles
-class StorageProfileBase(BaseModel):
-    name: str
-    path: str
-    description: Optional[str] = None
-    max_size_gb: Optional[float] = 0
-
-    @field_validator('path')
-    @classmethod
-    def prevent_path_traversal(cls, v: str) -> str:
-        if '..' in v:
-            raise ValueError('Path traversal characters (..) are not allowed')
-        if not v.startswith('/'):
-            raise ValueError('Path must be an absolute path starting with /')
-        return v
-
-    model_config = ConfigDict(from_attributes=True)
-
-class StorageProfileCreate(StorageProfileBase):
-    pass
-
-class StorageProfile(StorageProfileBase):
-    id: int
 
 class CameraSummary(BaseModel):
     """Sanitized camera schema for public API access (no sensitive URLs/tokens)"""
