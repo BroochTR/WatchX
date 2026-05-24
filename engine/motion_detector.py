@@ -5,111 +5,121 @@ import time
 
 logger = logging.getLogger(__name__)
 
-
 class MotionDetector:
     def __init__(self, camera_id, camera_name, config):
         self.camera_id = camera_id
         self.camera_name = camera_name
         self.config = config
-
+        self.fgbg = None
         self.motion_detected = False
-        self.last_motion_time = 0
-
+        self.last_motion_time = 0.0
         self.consecutive_motion_frames = 0
         self.consecutive_still_frames = 0
+        self.motion_frame_counter = 0
+        self.last_trigger_source = None
 
-        self.fgbg = cv2.createBackgroundSubtractorMOG2(
-            history=200,
-            varThreshold=25,
-            detectShadows=False
-        )
+    def reset(self, clear_background=True):
+        self.motion_detected = False
+        self.last_motion_time = 0.0
+        self.consecutive_motion_frames = 0
+        self.consecutive_still_frames = 0
+        self.motion_frame_counter = 0
+        self.last_trigger_source = None
+        if clear_background:
+            self.fgbg = None
 
-    def detect(
-        self,
-        frame,
-        event_callback=None,
-        save_snapshot_cb=None,
-    ):
-        if self.config.get("detect_motion_mode") == "Off":
+    def detect(self, frame, event_callback, save_snapshot_cb, privacy_polygons, motion_polygons, apply_masks_fn, external_motion_time=0, source="external"):
+        detect_mode = self.config.get('detect_motion_mode', 'Always')
+        recording_mode = self.config.get('recording_mode', 'Motion Triggered')
+        detect_engine = self.config.get('detect_engine', 'OpenCV')
+
+        # Check for global AI fallback
+        try:
+            from ai_detector import AIDetector
+            ai = AIDetector()
+            if detect_engine == 'AI' and not ai.enabled:
+                detect_engine = 'OpenCV (AI Fallback)'
+        except:
+            pass
+        
+        self.motion_frame_counter += 1
+        
+        # Periodic diagnostic log
+        if self.motion_frame_counter % 1000 == 0:
+            logger.info(f"Camera {self.camera_name} (ID: {self.camera_id}): Active Detect Engine: {detect_engine}")
+
+        
+        if detect_mode == 'Off' or recording_mode == 'Off':
+            if self.motion_detected:
+                self.motion_detected = False
+                logger.info(f"Camera {self.camera_name} (ID: {self.camera_id}): Motion END (detection disabled)")
+                if event_callback:
+                    event_callback(self.camera_id, 'motion_end')
             return False
 
-        motion_h = 180
-        scale = motion_h / frame.shape[0]
-        motion_w = int(frame.shape[1] * scale)
+        # OpenCV or AI Fallback
+        if detect_engine.startswith('OpenCV'):
+            motion_throttle = self.config.get('opt_motion_fps_throttle', 3)
 
-        small_frame = cv2.resize(
-            frame,
-            (motion_w, motion_h),
-            interpolation=cv2.INTER_LINEAR
-        )
+            if self.motion_frame_counter % motion_throttle != 0:
+                return self.motion_detected
 
-        fgmask = self.fgbg.apply(small_frame)
+            motion_h = self.config.get('opt_motion_analysis_height', 180)
+            scale = motion_h / frame.shape[0]
+            motion_w = int(frame.shape[1] * scale)
+            small_frame = cv2.resize(frame, (motion_w, motion_h), interpolation=cv2.INTER_NEAREST)
 
-        _, fgmask = cv2.threshold(
-            fgmask,
-            200,
-            255,
-            cv2.THRESH_BINARY
-        )
+            apply_masks_fn(small_frame, privacy_polygons, alpha=1.0, color=(0, 0, 0))
+            apply_masks_fn(small_frame, motion_polygons, alpha=1.0, color=(0, 0, 0))
 
-        kernel = np.ones((3, 3), np.uint8)
-        fgmask = cv2.erode(fgmask, kernel, iterations=1)
-        fgmask = cv2.dilate(fgmask, kernel, iterations=2)
+            if self.fgbg is None:
+                self.fgbg = cv2.createBackgroundSubtractorMOG2(history=200, varThreshold=25, detectShadows=False)
+                logger.info(f"Camera {self.camera_name}: MOG2 background subtractor initialized")
 
-        motion_pixels = np.count_nonzero(fgmask)
+            fgmask = self.fgbg.apply(small_frame)
+            _, fgmask = cv2.threshold(fgmask, 200, 255, cv2.THRESH_BINARY)
 
-        threshold = self.config.get("threshold", 1500)
+            if self.config.get('despeckle_filter', False):
+                kernel = np.ones((3,3), np.uint8)
+                fgmask = cv2.erode(fgmask, kernel, iterations=1)
+                fgmask = cv2.dilate(fgmask, kernel, iterations=1)
 
-        if motion_pixels > threshold:
-            self.consecutive_motion_frames += 1
-            self.consecutive_still_frames = 0
+            motion_ratio = (np.count_nonzero(fgmask) / fgmask.size) * 100
+            threshold_percent = self.config.get('threshold_percent', 1.0)
+            
+            if 'threshold' in self.config:
+                thresh_pixels = int(self.config['threshold'])
+                threshold_percent = (thresh_pixels / (small_frame.shape[0] * small_frame.shape[1])) * 100
 
-            if self.consecutive_motion_frames >= 2:
-                self.last_motion_time = time.time()
+            if motion_ratio > threshold_percent:
+                self.consecutive_motion_frames += 1
+                self.consecutive_still_frames = 0
+                min_frames = self.config.get('min_motion_frames', 2)
+                if self.consecutive_motion_frames >= min_frames:
+                    self.last_motion_time = time.time()
+                    if not self.motion_detected:
+                        self.motion_detected = True
+                        self.last_trigger_source = "OpenCV"
+                        logger.info(f"[DETECTION] Camera {self.camera_name} (ID: {self.camera_id}): Motion START (Source: {self.last_trigger_source})")
+                        pic_mode = self.config.get('picture_recording_mode', 'Manual')
+                        vid_mode = self.config.get('recording_mode', 'Off')
+                        snap_path = None
+                        if pic_mode == 'Motion Triggered':
+                            snap_path = save_snapshot_cb(frame, is_temp=False)
+                        elif vid_mode != 'Off':
+                            snap_path = save_snapshot_cb(frame, is_temp=True)
+                        if event_callback:
+                            payload = {'file_path': snap_path, 'source': 'Standard'} if snap_path else {'source': 'Standard'}
 
-                if not self.motion_detected:
-                    self.motion_detected = True
-
-                    logger.info(
-                        f"Camera {self.camera_name}: Motion detected"
-                    )
-
-                    snapshot_path = None
-
-                    if save_snapshot_cb:
-                        snapshot_path = save_snapshot_cb(frame)
-
+                            event_callback(self.camera_id, 'motion_start', payload)
+            else:
+                self.consecutive_still_frames += 1
+                self.consecutive_motion_frames = 0
+                motion_gap = self.config.get('motion_gap', 10)
+                if self.motion_detected and (time.time() - self.last_motion_time > motion_gap):
+                    self.motion_detected = False
+                    logger.info(f"Camera {self.camera_name} (ID: {self.camera_id}): Motion END")
                     if event_callback:
-                        payload = {
-                            "file_path": snapshot_path
-                        }
-
-                        event_callback(
-                            self.camera_id,
-                            "motion_start",
-                            payload
-                        )
-
-        else:
-            self.consecutive_still_frames += 1
-            self.consecutive_motion_frames = 0
-
-            motion_gap = self.config.get("motion_gap", 10)
-
-            if (
-                self.motion_detected and
-                (time.time() - self.last_motion_time) > motion_gap
-            ):
-                self.motion_detected = False
-
-                logger.info(
-                    f"Camera {self.camera_name}: Motion ended"
-                )
-
-                if event_callback:
-                    event_callback(
-                        self.camera_id,
-                        "motion_end"
-                    )
-
+                        event_callback(self.camera_id, 'motion_end')
+        
         return self.motion_detected
