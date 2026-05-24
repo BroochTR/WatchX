@@ -9,6 +9,7 @@ from sqlalchemy import func
 import models
 import database
 from routers.settings import get_setting
+from utils import WATCHX_STORAGE_ROOT, data_path_from_engine_path
 
 logger = logging.getLogger(__name__)
 
@@ -29,11 +30,9 @@ def translate_path(p):
     if os.path.exists(p):
         return p
 
-    # Standard watchxEngine -> Backend translation
-    if p.startswith("/var/lib/watchx/recordings"):
-        mapped = p.replace("/var/lib/watchx/recordings", "/data", 1)
-        if os.path.exists(mapped):
-            return mapped
+    mapped = data_path_from_engine_path(p)
+    if mapped != p and os.path.exists(mapped):
+        return mapped
 
     # Legacy Motion -> Backend translation
     if p.startswith("/var/lib/motion"):
@@ -63,15 +62,7 @@ def delete_event_media(event, db: Session, reason="Unknown"):
     try:
         # Translate paths from /var/lib/motion (DB) to /data (Backend container)
         def translate_path(p):
-            if not p:
-                return p
-            # Support new Engine path
-            if p.startswith("/var/lib/watchx/recordings"):
-                return p.replace("/var/lib/watchx/recordings", "/data", 1)
-            # Support legacy Motion path
-            if p.startswith("/var/lib/motion"):
-                return p.replace("/var/lib/motion", "/data", 1)
-            return p
+            return data_path_from_engine_path(p)
 
         file_path = translate_path(event.file_path)
         thumb_path = translate_path(event.thumbnail_path)
@@ -104,18 +95,18 @@ def cleanup_camera(db: Session, camera: models.Camera, media_type: str = None, s
     media_type: 'video' | 'snapshot' | None (both)
     skip_time_retention: If True, only enforces size-based quotas
     """
-    # 1. Cleanup Movies (max_storage_gb)
+    # 1. Cleanup Videos (max_storage_gb)
     if (not media_type or media_type == 'video') and camera.max_storage_gb and camera.max_storage_gb > 0:
-        total_movies_size = db.query(func.sum(models.Event.file_size)).filter(
+        total_videos_size = db.query(func.sum(models.Event.file_size)).filter(
             models.Event.camera_id == camera.id, 
             models.Event.type == "video"
         ).scalar() or 0
         
-        movies_used_gb = total_movies_size / (1024**3)
-        if movies_used_gb > camera.max_storage_gb:
-            logger.info(f"Camera {camera.name} MOVIE limit exceeded: {movies_used_gb:.2f}GB > {camera.max_storage_gb:.2f}GB")
+        videos_used_gb = total_videos_size / (1024**3)
+        if videos_used_gb > camera.max_storage_gb:
+            logger.info(f"Camera {camera.name} VIDEO limit exceeded: {videos_used_gb:.2f}GB > {camera.max_storage_gb:.2f}GB")
             target_gb = camera.max_storage_gb * 0.95
-            while movies_used_gb > target_gb:
+            while videos_used_gb > target_gb:
                 oldest = db.query(models.Event).filter(
                     models.Event.camera_id == camera.id, 
                     models.Event.type == "video"
@@ -125,7 +116,7 @@ def cleanup_camera(db: Session, camera: models.Camera, media_type: str = None, s
                 size_gb = (oldest.file_size / (1024**3)) if oldest.file_size else 0.05
                 delete_event_media(oldest, db, reason="Camera Quota (Video)")
                 db.commit()
-                movies_used_gb -= size_gb
+                videos_used_gb -= size_gb
 
     # 2. Cleanup Pictures (max_pictures_storage_gb)
     if (not media_type or media_type == 'snapshot') and camera.max_pictures_storage_gb and camera.max_pictures_storage_gb > 0:
@@ -158,12 +149,12 @@ def cleanup_camera(db: Session, camera: models.Camera, media_type: str = None, s
     now_aware = datetime.now().astimezone()
     
     if not media_type or media_type == 'video':
-        movie_delta = PRESERVE_MAP.get(camera.preserve_movies)
-        if movie_delta:
-            cutoff = now_aware - movie_delta
+        video_delta = PRESERVE_MAP.get(camera.preserve_videos)
+        if video_delta:
+            cutoff = now_aware - video_delta
             expired = db.query(models.Event).filter(models.Event.camera_id == camera.id, models.Event.type == "video", models.Event.timestamp_start < cutoff).all()
             if expired:
-                logger.info(f"Deleting {len(expired)} expired movies for camera {camera.name} (Cutoff: {cutoff})")
+                logger.info(f"Deleting {len(expired)} expired videos for camera {camera.name} (Cutoff: {cutoff})")
                 for e in expired:
                     delete_event_media(e, db, reason="Retention Time (Video)")
                 db.commit()
@@ -178,37 +169,6 @@ def cleanup_camera(db: Session, camera: models.Camera, media_type: str = None, s
                 for e in expired:
                     delete_event_media(e, db, reason="Retention Time (Snapshot)")
                 db.commit()
-
-def cleanup_profile(db: Session, profile: models.StorageProfile):
-    """
-    Enforce storage limits for a specific storage profile (shared across multiple cameras).
-    """
-    if not profile.max_size_gb or profile.max_size_gb <= 0:
-        return
-
-    # Calculate total size of all events using this profile
-    events_query = db.query(models.Event).join(models.Camera).filter(models.Camera.storage_profile_id == profile.id)
-    
-    total_size_bytes = db.query(func.sum(models.Event.file_size)).join(models.Camera).filter(models.Camera.storage_profile_id == profile.id).scalar() or 0
-    
-    current_used_gb = total_size_bytes / (1024**3)
-    
-    if current_used_gb > profile.max_size_gb:
-        logger.info(f"Storage Profile '{profile.name}' limit exceeded: {current_used_gb:.2f}GB > {profile.max_size_gb:.2f}GB")
-        target_gb = profile.max_size_gb * 0.95
-        
-        while current_used_gb > target_gb:
-            # Delete oldest event across all cameras in this profile
-            oldest = events_query.order_by(models.Event.timestamp_start.asc()).first()
-            if not oldest: break
-            
-            size_gb = (oldest.file_size / (1024**3)) if oldest.file_size else 0
-            if size_gb == 0:
-                 size_gb = 0.05 # Conservative estimate (50MB) for untracked videos
-            
-            delete_event_media(oldest, db, reason=f"Profile Quota ({profile.name})")
-            db.commit()
-            current_used_gb -= size_gb
 
 def cleanup_temp_files():
     """Delete usage-dependent temporary files (e.g. notification snapshots) older than 1 hour"""
@@ -260,12 +220,7 @@ def run_cleanup(quota_only=False):
                 # Quota enforcement (always runs)
                 cleanup_camera(db, camera, media_type=None, skip_time_retention=quota_only)
 
-            # Priority 2: Enforce Profile-level Limits
-            profiles = db.query(models.StorageProfile).all()
-            for profile in profiles:
-                cleanup_profile(db, profile)
-            
-            # Priority 3: Enforce Global Storage Limit
+            # Priority 2: Enforce Global Storage Limit
             max_global_str = get_setting(db, "max_global_storage_gb")
             max_global_gb = float(max_global_str) if max_global_str else 0
             
@@ -297,7 +252,7 @@ def run_cleanup(quota_only=False):
                             logger.error(f"Failed to delete event {oldest_event.id} during global cleanup. Skipping.")
                             # We don't decrement current_used_gb, so iterations will eventually hit max_iterations
             
-            # Priority 4: Cleanup Temp Files (Only on full run)
+            # Priority 3: Cleanup Temp Files (Only on full run)
             if not quota_only:
                 cleanup_temp_files()
 
@@ -345,8 +300,7 @@ def delete_camera_media(camera_id: int):
                 if not os.path.exists(camera_dir):
                      camera_dir = f"/data/{camera_id}"
             else:
-                storage_prefix = camera.storage_profile.path if camera.storage_profile else "/var/lib/watchx/recordings"
-                camera_dir = translate_path(os.path.join(storage_prefix, str(camera_id)))
+                camera_dir = translate_path(os.path.join(WATCHX_STORAGE_ROOT, str(camera_id)))
 
         if os.path.exists(camera_dir):
             shutil.rmtree(camera_dir, ignore_errors=True)

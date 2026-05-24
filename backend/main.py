@@ -254,6 +254,13 @@ async def lifespan(app: FastAPI):
     # Regenerate motion config
     with database.get_db_ctx() as db:
         try:
+            normalized_roles = db.execute(
+                text("UPDATE users SET role = 'client' WHERE role IS NULL OR role NOT IN ('admin', 'client')")
+            ).rowcount or 0
+            if normalized_roles > 0:
+                db.commit()
+                logger.info(f"Normalized {normalized_roles} unsupported user roles to client.")
+
             # Sync to engine directly using motion_service
             motion_service.generate_motion_config(db)
             

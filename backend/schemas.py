@@ -1,42 +1,12 @@
-from pydantic import BaseModel, field_validator, model_validator, ConfigDict
+from pydantic import BaseModel, field_validator, ConfigDict
 from typing import Optional, List, Dict, Any
 from datetime import datetime
 import json
 import logging
 
 class TestNotificationConfig(BaseModel):
-    channel: str # 'email', 'telegram', 'webhook'
+    channel: str # 'email', 'telegram'
     settings: dict
-
-    @model_validator(mode='after')
-    def validate_webhook_settings(self) -> 'TestNotificationConfig':
-        if self.channel == 'webhook':
-            url = self.settings.get('notify_webhook_url')
-            if url:
-                # We reuse the validation logic but manually here or call a helper
-                import socket
-                from urllib.parse import urlparse
-                import ipaddress
-                try:
-                    parsed = urlparse(url)
-                    if not parsed.scheme or not parsed.netloc:
-                        raise ValueError('Invalid URL format')
-                    host = parsed.hostname
-                    try:
-                        ip_addr = ipaddress.ip_address(host)
-                    except ValueError:
-                        try:
-                            ip_addr = ipaddress.ip_address(socket.gethostbyname(host))
-                        except Exception:
-                            return self
-                    if ip_addr.is_loopback or ip_addr.is_private or ip_addr.is_reserved or ip_addr.is_link_local:
-                        # Skip strictly blocking for local lab/test environments if explicitly intended
-                        # In a real production SaaS this should be True, but for local WatchX it is often needed.
-                        pass 
-                except Exception as e:
-                    if isinstance(e, ValueError): raise e
-                    raise ValueError(f'Invalid or unreachable URL: {str(e)}')
-        return self
 
 class CameraBase(BaseModel):
     name: str
@@ -147,13 +117,11 @@ class CameraBase(BaseModel):
             raise ValueError(f'Mask validation error: {str(e)}')
 
     # Notification Destinations
-    notify_webhook_url: Optional[str] = None
     notify_telegram_token: Optional[str] = None
     notify_telegram_chat_id: Optional[str] = None
     notify_email_address: Optional[str] = None
 
     # Health Notification Destinations
-    notify_health_webhook_url: Optional[str] = None
     notify_health_telegram_token: Optional[str] = None
     notify_health_telegram_chat_id: Optional[str] = None
     notify_health_email_recipient: Optional[str] = None
@@ -161,15 +129,12 @@ class CameraBase(BaseModel):
     # Notifications
     notify_start_email: Optional[bool] = False
     notify_start_telegram: Optional[bool] = False
-    notify_start_webhook: Optional[bool] = False
     notify_start_command: Optional[bool] = False
-    notify_end_webhook: Optional[bool] = False
     notify_end_command: Optional[bool] = False
     
     # Health Notifications
     notify_health_email: Optional[bool] = False
     notify_health_telegram: Optional[bool] = False
-    notify_health_webhook: Optional[bool] = False
     
     notify_attach_image_email: Optional[bool] = True
 
@@ -344,50 +309,6 @@ class CameraBase(BaseModel):
                 raise ValueError('Localhost access is not allowed')
         return v
 
-    @field_validator('notify_webhook_url')
-    @classmethod
-    def validate_webhook_url(cls, v: Optional[str]) -> Optional[str]:
-        if not v:
-            return v
-            
-        import socket
-        from urllib.parse import urlparse
-        import ipaddress
-
-        try:
-            parsed = urlparse(v)
-            if parsed.scheme not in ('http', 'https'):
-                raise ValueError('Webhook must be http or https')
-            
-            hostname = parsed.hostname
-            if not hostname:
-                raise ValueError('Invalid webhook hostname')
-
-            # Block localhost strings
-            if hostname.lower() in ['localhost', 'loopback', '::1', '127.0.0.1']:
-                 raise ValueError('Webhook cannot target localhost')
-
-            # Resolve IP to check for private networks (Basic SSRF protection)
-            # Note: This has race conditions (DNS rebinding) but is acceptable for local WatchX setups
-            try:
-                ip_str = socket.gethostbyname(hostname)
-                ip = ipaddress.ip_address(ip_str)
-                if ip.is_loopback or ip.is_private or ip.is_reserved:
-                    # Strict SSRF Protection: Block access to internal/private networks
-                    # This prevents targeting other containers (db, engine) or local services.
-                    # Exception: User might need local IPs for trusted local integrations,
-                    # but for security we block by default.
-                    raise ValueError(f'Webhook cannot target private or reserved IP ranges ({ip_str})')
-            except socket.gaierror:
-                pass # DNS fail - might be unreachable, but let requests handle it?
-                
-        except ValueError as e:
-            raise e
-        except Exception:
-             # If parsing fails, it's likely invalid
-             pass
-        return v
-
     model_config = ConfigDict(from_attributes=True)
 
 class CameraCreate(CameraBase):
@@ -436,14 +357,14 @@ class BulkDeleteRequest(BaseModel):
 class UserBase(BaseModel):
     username: str
     email: Optional[str] = None
-    role: Optional[str] = "viewer"
+    role: Optional[str] = "client"
     is_2fa_enabled: Optional[bool] = False
 
     @field_validator('role')
     @classmethod
     def validate_role(cls, v: Optional[str]) -> str:
-        allowed = {"admin", "viewer", "client"}
-        role = v or "viewer"
+        allowed = {"admin", "client"}
+        role = v or "client"
         if role not in allowed:
             raise ValueError("Invalid role")
         return role

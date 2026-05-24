@@ -75,28 +75,23 @@ class Camera(Base):
     create_debug_media = Column(Boolean, default=False)
 
     # Notification Destinations
-    notify_webhook_url = Column(String, nullable=True)
     notify_telegram_token = Column(String, nullable=True)
     notify_telegram_chat_id = Column(String, nullable=True)
     notify_email_address = Column(String, nullable=True)
 
     # Health Notification Destinations (Overrides generic if set)
-    notify_health_webhook_url = Column(String, nullable=True)
     notify_health_telegram_token = Column(String, nullable=True)
     notify_health_telegram_chat_id = Column(String, nullable=True)
     notify_health_email_recipient = Column(String, nullable=True)
 
     notify_start_email = Column(Boolean, default=False)
     notify_start_telegram = Column(Boolean, default=False)
-    notify_start_webhook = Column(Boolean, default=False)
     notify_start_command = Column(Boolean, default=False)
-    notify_end_webhook = Column(Boolean, default=False)
     notify_end_command = Column(Boolean, default=False)
     
     # Health Notifications
     notify_health_email = Column(Boolean, default=False)
     notify_health_telegram = Column(Boolean, default=False)
-    notify_health_webhook = Column(Boolean, default=False)
     
     notify_attach_image_email = Column(Boolean, default=True)
     notify_attach_image_telegram = Column(Boolean, default=True)
@@ -207,7 +202,7 @@ class User(Base):
     username = Column(String, unique=True, index=True)
     email = Column(String, unique=True, index=True)
     hashed_password = Column(String)
-    role = Column(String, default="viewer") # "admin", "viewer", "client"
+    role = Column(String, default="client") # "admin", "client"
     avatar_path = Column(String, nullable=True)
     totp_secret = Column(String, nullable=True)
     is_2fa_enabled = Column(Boolean, default=False)
