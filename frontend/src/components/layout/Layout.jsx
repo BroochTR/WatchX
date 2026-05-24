@@ -1,31 +1,18 @@
-import React, { useState } from 'react';
+import React from 'react';
 import { useLocation } from 'react-router-dom';
 import { Sidebar } from './Sidebar';
-import { Menu, X, ShieldAlert, AlertTriangle } from 'lucide-react';
+import { ShieldAlert } from 'lucide-react';
 import { useAuth } from '../../contexts/AuthContext';
 
-export const Layout = ({ children, activeTab, onTabChange, theme, toggleTheme }) => {
+export const Layout = ({ children, activeTab, onTabChange, theme, toggleTheme, overlay, overlayRoute }) => {
     const location = useLocation();
     const { healthDetails, user } = useAuth();
-    const isLivePage = activeTab === 'live' || location.pathname.startsWith('/live') || activeTab === 'timeline';
-    const [sidebarOpen, setSidebarOpen] = useState(false);
-
-    const pageTitles = {
-        dashboard: 'Operations Overview',
-        cameras: 'Camera Matrix',
-        live: 'Live Control',
-        timeline: 'Event Timeline',
-        settings: 'System Tuning',
-        logs: 'Signal Logs',
-        about: 'System Manifest',
-        profile: 'Operator Profile'
-    };
-    const pageTitle = pageTitles[activeTab] || 'Control Room';
+    const isLivePage = activeTab === 'live' || location.pathname.startsWith('/live');
 
     const isWeakKey = healthDetails?.is_weak_key && user?.role === 'admin';
 
     return (
-        <div className="min-h-screen bg-background text-foreground flex overflow-x-hidden relative w-full max-w-full">
+        <div className="min-h-screen overflow-hidden bg-background text-foreground relative w-full max-w-full">
             {/* Global Security Warning (High Visibility) */}
             {isWeakKey && (
                 <div className="fixed inset-x-0 top-0 z-[100] p-4 flex justify-center pointer-events-none">
@@ -70,69 +57,22 @@ export const Layout = ({ children, activeTab, onTabChange, theme, toggleTheme })
                     </div>
                 </div>
             )}
+            
 
-            {/* Mobile overlay */}
-            {sidebarOpen && (
-                <div
-                    className="fixed inset-0 bg-black/50 z-45 lg:hidden"
-                    onClick={() => setSidebarOpen(false)}
-                />
-            )}
-
-            {/* Sidebar */}
             <Sidebar
                 activeTab={activeTab}
-                onTabChange={(tab) => {
-                    onTabChange(tab);
-                    setSidebarOpen(false);
-                }}
+                onTabChange={onTabChange}
                 theme={theme}
                 toggleTheme={toggleTheme}
-                isOpen={sidebarOpen}
-                onClose={() => setSidebarOpen(false)}
             />
 
-            {/* Main content */}
-            <div className="flex-1 lg:ml-72 flex flex-col h-screen min-w-0 max-w-full overflow-hidden">
-                {/* Mobile header - fixed at top */}
-                <div className="lg:hidden sticky top-0 z-40 bg-background/90 backdrop-blur border-b border-border/60 p-3 flex items-center justify-between w-full max-w-full overflow-hidden">
-                    <button
-                        onClick={() => setSidebarOpen(true)}
-                        className="p-2 rounded-md hover:bg-accent/20 shrink-0"
-                    >
-                        <Menu className="w-6 h-6" />
-                    </button>
-                    <h1 className="text-lg font-bold text-foreground truncate px-2 flex-1 text-center">
-                        watchx
-                    </h1>
-                    <div className="w-10 shrink-0" /> {/* Spacer for centering */}
-                </div>
-
-                {!isLivePage && (
-                    <div className="hidden lg:flex items-center justify-between px-8 py-5 border-b border-border/60 bg-card/60 backdrop-blur">
-                        <div>
-                            <p className="text-xs uppercase tracking-[0.3em] text-muted-foreground">Control Room</p>
-                            <h1 className="text-2xl font-bold tracking-tight">{pageTitle}</h1>
-                        </div>
-                        <div className="flex items-center gap-3">
-                            <div className="px-3 py-1 rounded-full border border-border/60 bg-background/60 text-xs font-mono text-muted-foreground">
-                                Mode: {theme === 'dark' ? 'Night' : 'Day'}
-                            </div>
-                            <button
-                                onClick={toggleTheme}
-                                className="px-3 py-1 rounded-full border border-border/60 text-xs uppercase tracking-wider text-muted-foreground hover:text-foreground hover:bg-accent/20"
-                            >
-                                Toggle Theme
-                            </button>
-                        </div>
-                    </div>
-                )}
-
-                <main className={`flex-1 overflow-y-auto overflow-x-hidden relative ${isLivePage ? 'p-0 w-full' : 'px-4 sm:px-6 py-6 lg:px-10 lg:py-8'}`}>
-                    <div className={isLivePage ? "w-full min-h-full flex flex-col" : "w-full max-w-7xl mx-auto min-w-0 overflow-hidden"}>
+            <div className="relative z-20 flex min-h-screen flex-col">
+                <main className={`flex-1 overflow-y-auto overflow-x-hidden px-3 pb-28 pt-24 sm:px-6 lg:px-10 lg:pb-10 ${isLivePage ? 'lg:pt-24' : 'lg:pt-24'}`}>
+                    <div className={`mx-auto min-h-full min-w-0 overflow-hidden ${isLivePage ? 'w-full max-w-[1600px]' : 'w-full max-w-7xl'} ${overlayRoute ? 'pointer-events-none select-none saturate-50' : ''}`}>
                         {children}
                     </div>
                 </main>
+                {overlay}
             </div>
         </div>
     );
