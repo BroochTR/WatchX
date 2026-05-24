@@ -18,6 +18,7 @@ sys.path.append('/app')
 from database import SessionLocal
 from models import Event, Camera
 import logging
+from utils import WATCHX_STORAGE_ROOT, data_path_from_engine_path, is_allowed_storage_path
 
 # Configure logging
 logger = logging.getLogger(__name__)
@@ -83,15 +84,13 @@ def is_video_valid(file_path):
 def is_safe_path(file_path):
     """Ensure file path is within allowed data directories"""
     try:
-        abs_path = os.path.abspath(file_path)
-        # Strict check for data directory
-        return abs_path.startswith('/data') or abs_path.startswith('/var/lib/watchx/recordings')
+        return is_allowed_storage_path(file_path)
     except:
         return False
 
 def sync_recordings(dry_run=False):
     logger.info("=" * 60)
-    logger.info("watchx - Orphan Recording Recovery")
+    logger.info("WatchX - Orphan Recording Recovery")
     logger.info("=" * 60)
     logger.info(f"Timezone: {TZ_NAME}")
     logger.info(f"Mode: {'DRY RUN (no changes)' if dry_run else 'LIVE (will import)'}")
@@ -182,7 +181,7 @@ def sync_recordings(dry_run=False):
                     
                     # Build the DB path format
                     rel_path = os.path.relpath(full_path, data_root).replace("\\", "/")
-                    db_file_path = f"/var/lib/watchx/recordings/{rel_path}"
+                    db_file_path = f"{WATCHX_STORAGE_ROOT}/{rel_path}"
                     
                     # Check if already in DB
                     exists = db.query(Event).filter(Event.file_path == db_file_path).first()
@@ -245,12 +244,12 @@ def sync_recordings(dry_run=False):
                     
                     if os.path.exists(thumb_full):
                         thumb_rel = os.path.relpath(thumb_full, data_root).replace("\\", "/")
-                        thumb_db_path = f"/var/lib/watchx/recordings/{thumb_rel}"
+                        thumb_db_path = f"{WATCHX_STORAGE_ROOT}/{thumb_rel}"
                     elif not dry_run:
                         # Generate thumbnail
                         if generate_thumbnail(full_path, thumb_full):
                             thumb_rel = os.path.relpath(thumb_full, data_root).replace("\\", "/")
-                            thumb_db_path = f"/var/lib/watchx/recordings/{thumb_rel}"
+                            thumb_db_path = f"{WATCHX_STORAGE_ROOT}/{thumb_rel}"
                     
                     if dry_run:
                         logger.info(f"  [Would Import] {rel_path}")
@@ -293,11 +292,7 @@ def sync_recordings(dry_run=False):
                 continue
             
             # Convert DB path to filesystem path
-            file_path = event.file_path
-            if file_path.startswith('/var/lib/watchx/recordings'):
-                file_path = file_path.replace('/var/lib/watchx/recordings', '/data', 1)
-            elif file_path.startswith('/var/lib/motion'):
-                file_path = file_path.replace('/var/lib/motion', '/data', 1)
+            file_path = data_path_from_engine_path(event.file_path)
             
             if not os.path.exists(file_path):
                 continue
@@ -325,11 +320,7 @@ def sync_recordings(dry_run=False):
                 continue
             
             # Convert DB path to filesystem path
-            file_path = event.file_path
-            if file_path.startswith('/var/lib/watchx/recordings'):
-                file_path = file_path.replace('/var/lib/watchx/recordings', '/data', 1)
-            elif file_path.startswith('/var/lib/motion'):
-                file_path = file_path.replace('/var/lib/motion', '/data', 1)
+            file_path = data_path_from_engine_path(event.file_path)
             
             if not os.path.exists(file_path):
                 # File missing - delete DB entry
@@ -403,11 +394,7 @@ def sync_recordings(dry_run=False):
                 continue
 
             # Convert to fs path
-            file_path = event.file_path
-            if file_path.startswith('/var/lib/watchx/recordings'):
-                file_path = file_path.replace('/var/lib/watchx/recordings', '/data', 1)
-            elif file_path.startswith('/var/lib/motion'):
-                file_path = file_path.replace('/var/lib/motion', '/data', 1)
+            file_path = data_path_from_engine_path(event.file_path)
             
             if not os.path.exists(file_path):
                 continue

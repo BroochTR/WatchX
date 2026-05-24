@@ -5,6 +5,7 @@ import os
 import subprocess
 from database import SessionLocal
 from models import Event
+from utils import data_path_from_engine_path
 
 def generate_thumbnail(video_path, thumb_path):
     """Generate thumbnail using ffmpeg"""
@@ -30,10 +31,7 @@ for e in events:
         continue
     
     fp = e.file_path
-    if fp.startswith('/var/lib/watchx/recordings'):
-        fp = fp.replace('/var/lib/watchx/recordings', '/data', 1)
-    elif fp.startswith('/var/lib/motion'):
-        fp = fp.replace('/var/lib/motion', '/data', 1)
+    fp = data_path_from_engine_path(fp)
     
     exists = os.path.exists(fp)
     size = os.path.getsize(fp) if exists else 0

@@ -19,7 +19,7 @@ def cleanup_db():
             "stream_quality",
             "stream_max_rate",
             "stream_port",
-            "movie_passthrough",
+            "video_passthrough",
             "auto_threshold_tuning",
             "auto_noise_detection",
             "light_switch_detection",
