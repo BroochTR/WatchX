@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <defs>
+    <linearGradient id="watchxGradient" x1="10%" y1="10%" x2="90%" y2="90%">
+      <stop offset="0%" stop-color="#22c55e"/>
+      <stop offset="55%" stop-color="#06b6d4"/>
+      <stop offset="100%" stop-color="#2563eb"/>
+    </linearGradient>
+    <linearGradient id="watchxFill" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#ecfeff"/>
+      <stop offset="100%" stop-color="#dbeafe"/>
+    </linearGradient>
+  </defs>
+  <path d="M32 6 L54 19 L54 45 L32 58 L10 45 L10 19 Z" fill="url(#watchxFill)" stroke="url(#watchxGradient)" stroke-width="2.6" stroke-linejoin="round"/>
+  <path d="M15 32 C20 24 25.5 20 32 20 C38.5 20 44 24 49 32 C44 40 38.5 44 32 44 C25.5 44 20 40 15 32 Z" fill="none" stroke="url(#watchxGradient)" stroke-width="2.8" stroke-linecap="round" stroke-linejoin="round"/>
+  <circle cx="32" cy="32" r="8.2" fill="#0f172a" stroke="url(#watchxGradient)" stroke-width="2.8"/>
+  <path d="M28.7 28.7 L35.3 35.3 M35.3 28.7 L28.7 35.3" fill="none" stroke="#ffffff" stroke-width="2.8" stroke-linecap="round"/>
+</svg>

@@ -335,7 +335,7 @@ export const GroupsManager = ({ cameras, onUpdate }) => {
                                     <button
                                         onClick={() => setCopyingGroup(group)}
                                         className="flex items-center space-x-1.5 px-3 py-1.5 text-xs font-medium text-blue-600 bg-blue-50 hover:bg-blue-100 rounded-md transition-colors dark:bg-blue-900/20 dark:text-blue-400 dark:hover:bg-blue-900/40"
-                                        title="Copy Settings to all cameras in group"
+                                        title="Copy Settings"
                                     >
                                         <Copy className="w-3.5 h-3.5" />
                                         <span>Copy Settings</span>

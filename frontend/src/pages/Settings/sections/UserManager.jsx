@@ -71,7 +71,6 @@ export const UserManager = ({
                             value={newUser.role}
                             onChange={(val) => setNewUser({ ...newUser, role: val })}
                             options={[
-                                { value: 'viewer', label: 'Viewer (Read Only)' },
                                 { value: 'client', label: 'Client (Limited Cameras)' },
                                 { value: 'admin', label: 'Admin (Full Access)' }
                             ]}

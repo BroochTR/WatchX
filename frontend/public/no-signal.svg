@@ -1,0 +1,59 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 450" role="img" aria-labelledby="title desc">
+  <title id="title">No Signal</title>
+  <desc id="desc">Color bar test pattern with a centered no signal label.</desc>
+  <rect width="800" height="450" fill="#111111"/>
+
+  <g>
+    <rect x="0" y="0" width="114.3" height="240" fill="#d9d9d9"/>
+    <rect x="114.3" y="0" width="114.3" height="240" fill="#445ca8"/>
+    <rect x="228.6" y="0" width="114.3" height="240" fill="#f51925"/>
+    <rect x="342.9" y="0" width="114.3" height="240" fill="#b3509f"/>
+    <rect x="457.2" y="0" width="114.3" height="240" fill="#6ebf44"/>
+    <rect x="571.5" y="0" width="114.3" height="240" fill="#69bdd0"/>
+    <rect x="685.8" y="0" width="114.2" height="240" fill="#ffe900"/>
+  </g>
+
+  <g>
+    <rect x="0" y="240" width="114.3" height="40" fill="#f3f3f3"/>
+    <rect x="114.3" y="240" width="114.3" height="40" fill="#5d6bb0"/>
+    <rect x="228.6" y="240" width="114.3" height="40" fill="#f04b85"/>
+    <rect x="342.9" y="240" width="114.3" height="40" fill="#ff8ad7"/>
+    <rect x="457.2" y="240" width="114.3" height="40" fill="#5cc9df"/>
+    <rect x="571.5" y="240" width="114.3" height="40" fill="#d4f1f7"/>
+    <rect x="685.8" y="240" width="114.2" height="40" fill="#f7f7f7"/>
+  </g>
+
+  <g>
+    <rect x="0" y="280" width="114.3" height="34" fill="#ffe900"/>
+    <rect x="114.3" y="280" width="114.3" height="34" fill="#131313"/>
+    <rect x="228.6" y="280" width="114.3" height="34" fill="#6ebf44"/>
+    <rect x="342.9" y="280" width="114.3" height="34" fill="#131313"/>
+    <rect x="457.2" y="280" width="114.3" height="34" fill="#ff2a31"/>
+    <rect x="571.5" y="280" width="114.3" height="34" fill="#131313"/>
+    <rect x="685.8" y="280" width="114.2" height="34" fill="#d9d9d9"/>
+  </g>
+
+  <g>
+    <rect x="0" y="314" width="140" height="136" fill="#6b3d16"/>
+    <rect x="140" y="314" width="140" height="136" fill="#efefef"/>
+    <rect x="280" y="314" width="140" height="136" fill="#51853f"/>
+    <rect x="420" y="314" width="180" height="136" fill="#161616"/>
+    <rect x="600" y="314" width="25" height="136" fill="#000000"/>
+    <rect x="625" y="314" width="35" height="136" fill="#101010"/>
+    <rect x="660" y="314" width="35" height="136" fill="#1a1a1a"/>
+    <rect x="695" y="314" width="35" height="136" fill="#222222"/>
+    <rect x="730" y="314" width="35" height="136" fill="#161616"/>
+    <rect x="765" y="314" width="35" height="136" fill="#101010"/>
+  </g>
+
+  <rect x="0" y="168" width="800" height="72" fill="#1f1b1c" opacity="0.96"/>
+  <text
+    x="400"
+    y="214"
+    text-anchor="middle"
+    font-family="Segoe UI, Arial, sans-serif"
+    font-size="30"
+    letter-spacing="1"
+    fill="#ffffff"
+  >NO SIGNAL</text>
+</svg>

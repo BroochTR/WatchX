@@ -121,6 +121,25 @@
     box-shadow: 0 1px 0 rgba(255, 255, 255, 0.7) inset;
   }
 
+  .timeline-date-input {
+    color-scheme: light;
+  }
+
+  .timeline-date-input::-webkit-calendar-picker-indicator {
+    color: transparent;
+    cursor: pointer;
+    opacity: 0;
+  }
+
+  .dark .timeline-date-input {
+    color-scheme: dark;
+  }
+
+  .dark .timeline-date-input::-webkit-calendar-picker-indicator {
+    filter: none;
+    opacity: 0;
+  }
+
   select,
   select option,
   select optgroup {

@@ -57,7 +57,7 @@ export const Sidebar = ({ activeTab, onTabChange, theme, toggleTheme }) => {
             { id: 'cameras', label: 'Cameras', icon: Camera },
             { id: 'live', label: 'Live', icon: Film },
             { id: 'timeline', label: 'Playback', icon: History },
-            ...(user?.role !== 'viewer' ? [{ id: 'settings', label: 'Settings', icon: Settings }] : []),
+            { id: 'settings', label: 'Settings', icon: Settings },
         ];
 
     return (
