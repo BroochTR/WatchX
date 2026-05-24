@@ -21,7 +21,7 @@ from slowapi.errors import RateLimitExceeded
 
 import database
 from database import engine, Base
-from routers import cameras, events, stats, settings, auth, users, groups, logs, homepage, api_tokens, storage
+from routers import cameras, events, stats, settings, auth, users, groups, logs, homepage, api_tokens
 import auth_service
 import crud
 import models
@@ -251,8 +251,6 @@ async def lifespan(app: FastAPI):
     log_service.start_scheduler()
     import health_service
     health_service.start_health_service()
-    import backup_service
-    backup_service.start_scheduler()
     # Regenerate motion config
     with database.get_db_ctx() as db:
         try:
@@ -314,13 +312,40 @@ app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
 # CORS configuration
 # CORS Configuration
-# Default to empty/restrictive for security. User should set ALLOWED_ORIGINS in .env
+# Default to empty/restrictive for security. User should set ALLOWED_ORIGINS or PUBLIC_BASE_URL in .env
+def normalize_origin(raw_value: str) -> Optional[str]:
+    value = (raw_value or "").strip()
+    if not value:
+        return None
+
+    if value == "*":
+        return value
+
+    parsed = urlparse(value)
+    if not parsed.scheme:
+        parsed = urlparse(f"https://{value}")
+
+    if not parsed.scheme or not parsed.netloc:
+        logger.warning(f"Ignoring invalid origin configuration: {raw_value}")
+        return None
+
+    return f"{parsed.scheme}://{parsed.netloc}"
+
+
 allowed_origins_raw = os.getenv("ALLOWED_ORIGINS", "")
-if not allowed_origins_raw:
-    # Allow localhost for development if not set
-    allowed_origins = ["http://localhost:5173", "http://localhost:5005", "http://localhost:8080"]
+if allowed_origins_raw:
+    allowed_origins = []
+    for raw_origin in allowed_origins_raw.split(","):
+        normalized_origin = normalize_origin(raw_origin)
+        if normalized_origin and normalized_origin not in allowed_origins:
+            allowed_origins.append(normalized_origin)
 else:
-    allowed_origins = allowed_origins_raw.split(",")
+    public_origin = normalize_origin(os.getenv("PUBLIC_BASE_URL", ""))
+    if public_origin:
+        allowed_origins = [public_origin]
+    else:
+        # Allow localhost for development if not set
+        allowed_origins = ["http://localhost:5173", "http://localhost:5005", "http://localhost:8080"]
 
 if "*" in allowed_origins:
     logger.warning("--------------------------------------------------------------------------------")
@@ -367,7 +392,6 @@ app.include_router(groups.router)
 app.include_router(logs.router)
 app.include_router(homepage.router, prefix="/v1")
 app.include_router(api_tokens.router, prefix="/v1")
-app.include_router(storage.router)
 
 from fastapi.responses import FileResponse
 import os
@@ -400,20 +424,6 @@ async def get_secure_media(file_path: str, request: Request, token: Optional[str
     if not full_path.startswith("/data/"):
          logger.warning(f"Security Alert (Media): Attempted access to {full_path}")
          raise HTTPException(status_code=403, detail="Access denied")
-
-    # RBAC for backups folder: Only allow admins to access anything in /data/backups/
-    if full_path.startswith("/data/backups/"):
-         # We already validated the token above, now check the user role
-         with database.get_db_ctx() as db:
-              try:
-                  target_user = await auth_service.get_user_from_token(media_token, db)
-                  if target_user.role != 'admin':
-                      logging.warning(f"Security Alert (Backups): Unauthorized access attempt to {full_path} by user {target_user.username}")
-                      raise HTTPException(status_code=403, detail="Access denied to system backups")
-              except HTTPException as e:
-                  raise e
-              except Exception:
-                  raise HTTPException(status_code=403, detail="Access denied")
 
     if not os.path.exists(full_path):
         raise HTTPException(status_code=404, detail="File not found")

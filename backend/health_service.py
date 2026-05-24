@@ -103,7 +103,7 @@ async def check_camera_health():
                             pass
                 except Exception as e:
                     # Use warning for expected connectivity issues during restarts
-                    logger.warning(f"Health check: Cannot reach Engine (watchxEngine might be starting or stopped)")
+                    logger.warning(f"Health check: Cannot reach Engine (WatchX Engine might be starting or stopped)")
                     continue
 
                 with database.get_db_ctx() as db:
@@ -121,7 +121,7 @@ async def trigger_health_notification(db: Session, camera, status):
     """Dispatcher for health-related notifications"""
     
     # Check if health notifications are enabled for this camera
-    if not (camera.notify_health_email or camera.notify_health_telegram or camera.notify_health_webhook):
+    if not (camera.notify_health_email or camera.notify_health_telegram):
         return
 
     # Prepare message
