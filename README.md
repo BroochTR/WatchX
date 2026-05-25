@@ -68,7 +68,7 @@ frontend/  Giao diện web xây dựng bằng React
 - Docker Compose
 
 ### Chạy dự án
-
+Cấu hình .env dựa trên example.env
 ```bash
 docker compose up -d --build
 ```
